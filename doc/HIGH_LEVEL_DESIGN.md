@@ -39,7 +39,9 @@ App UI
   |
 Application Service
   |
-Task Repository ---- Scheduler ---- Boot/Alarm Receiver
+Task Repository ---- Credential Repository
+  |
+Scheduler ---- Boot Receiver / AlarmManager（恢复辅助）
   |
 Runner Engine
   |
@@ -51,6 +53,11 @@ Capability Facade
   |
 Runtime Store / Artifact Store
 ```
+
+架构说明：
+
+- `Boot Receiver / AlarmManager` 仅作为调度恢复辅助手段，不是调度主链路；主链路由前台调度服务直接触发
+- `Credential Repository` 独立于 `Task Repository`，通过 `CredentialRepository` 接口向调度层和执行引擎提供账号解析能力，不直接参与调度主链路
 
 ## 5. 模块划分
 
@@ -179,6 +186,22 @@ Runtime Store / Artifact Store
 - 任务定义、连续运行会话记录、运行记录、步骤记录、错误码和调度信息存储
 - 账号组游标和连续运行恢复状态存储
 - 账号维度聚合结果和最近失败上下文存储
+
+### 5.11 凭据管理（credential）
+
+职责：
+
+- 管理 `CredentialProfile`（测试账号元数据与加密敏感字段）
+- 管理 `CredentialSet`（账号组定义及顺序关系）
+- 向调度层和执行引擎提供当前轮次账号解析（`active_credential`）
+- 账号引用完整性校验（删除前检查是否被任务引用）
+- 敏感字段加解密，密钥由 Android Keystore 管理
+
+约束：
+
+- 凭据模块对外只暴露 `CredentialRepository` 接口，不直接暴露 Room Entity 或加密实现细节
+- 账号敏感字段解密操作只允许在本模块内发生
+- 对应的数据模型与接口定义详见 [DETAILED_DESIGN.md §3](DETAILED_DESIGN.md)
 
 ## 6. 核心数据流
 
