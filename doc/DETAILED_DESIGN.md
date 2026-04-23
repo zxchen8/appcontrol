@@ -392,6 +392,7 @@
 - `timeoutMs`：步骤超时，必填
 - `retry`：步骤级重试配置，选填，未配置时使用系统默认值
 - `onFailure`：失败策略，选填，未配置时使用系统默认值
+- `clearsSensitiveContext`：步骤成功后是否明确清除敏感输入上下文，选填，默认 `false`
 - `params`：步骤参数，必填
 
 默认值建议：
@@ -406,6 +407,7 @@
 - 因此 `retry.maxRetries = 0` 表示不做额外重试
 - 例如 `retry.maxRetries = 1` 表示该步骤最多尝试 2 次（首次执行 + 1 次步骤级重试）
 - 任务级 `maxRetries` 与步骤级 `retry.maxRetries` 使用同一计数口径
+- `clearsSensitiveContext = true` 只用于在敏感输入后的后续步骤成功时，显式确认已经离开敏感输入页面并恢复默认截图策略
 
 ### 4.3 失败策略
 
@@ -496,6 +498,7 @@
 - `input_text` 的步骤日志只允许记录选择器摘要、输入来源类型和是否脱敏，不得记录解析后的原始文本值
 - 若 `textRef` 指向 `sensitive = true` 的变量，执行日志中只允许记录变量名、字段名和 `masked = true`，不得记录变量解析值、长度推断信息或密文载荷
 - 若 `textRef` 指向 `sensitive = true` 的变量，则该步骤失败时的截图行为必须遵循 9.6 中定义的强制抑制条件，不能因为 `captureScreenshotOnStepFailure = true` 而绕过抑制规则
+- 若 `textRef` 指向 `sensitive = true` 的变量，执行引擎必须在运行时把 `sensitiveContextActive` 置为 `true`；该标记仅属于运行时上下文，不单独持久化为状态模型字段
 
 ### 5.7 `wait_element`
 
@@ -652,6 +655,7 @@
 - 任务是否启用继续由顶层字段 `enabled` 表达，不复用运行状态枚举
 - 调度待命与下一次触发时间通过 `TaskScheduleStateEntity` 表达，不与任务定义状态合并
 - `definitionStatus = invalid` 的任务不得进入 scheduler 或 runner 的正常执行路径；只有修复配置并回到 `ready` 后，才允许重新进入调度待命
+- 手动真实执行使用与调度相同的 `definitionStatus` 准入门禁；当 `definitionStatus != ready` 时，app-service 必须在创建运行实例前直接阻断，并向 UI 返回最近一次校验错误，runner-engine 不得启动
 - 状态转移首版固定为：首次导入或原始编辑后的未校验配置进入 `draft`；校验成功后转为 `ready`；任一后续校验失败则转为 `invalid`；修复并重新校验成功后从 `invalid` 回到 `ready`
 
 ### 8.2 调度状态
@@ -681,6 +685,11 @@
 - `timed_out`
 - `cancelled`
 - `blocked`
+
+状态区分约束：
+
+- `blocked`：任务因为配置、环境、凭据或安全门禁不满足而无法安全继续，执行可以在未进入第一条动作步骤前就终止；例如 `definitionStatus != ready`、前置条件失败、账号组无可用账号、凭据密钥不可用
+- `failed`：任务已经通过执行门禁并开始执行动作步骤，但最终因不可恢复的步骤/动作失败而终止
 
 ### 8.4 步骤状态
 
@@ -803,13 +812,16 @@
 截图与诊断产物保留规则：
 
 - 失败截图默认开启；只有命中强制抑制条件或存储退化条件时才允许不写入截图
-- 首版强制抑制条件固定为：当前失败发生在使用 `sensitive = true` 变量的 `input_text` 步骤中，或失败发生在该步骤之后、且任务尚未通过后续步骤确认已经离开同一敏感输入页面
-- 一旦后续步骤已经确认进入非敏感页面，失败截图恢复为默认开启，不允许继续沿用上一页面的抑制状态
+- 当某个 `input_text` 步骤使用 `sensitive = true` 的变量成功开始输入时，执行引擎必须把运行时标记 `sensitiveContextActive` 置为 `true`
+- 首版强制抑制条件固定为：终端失败发生时 `sensitiveContextActive = true`
+- `sensitiveContextActive` 仅可通过以下方式清除：后续步骤成功且 `clearsSensitiveContext = true`，或 `start_app` / `restart_app` / `stop_app` 成功并明确切离当前敏感输入页面
+- 一旦 `sensitiveContextActive` 被清除，失败截图恢复为默认开启，不允许继续沿用上一页面的抑制状态
 - 本地截图、日志和其他诊断产物必须配置保留上限；首版默认保留最近 14 天、每个 `taskId` 最多 500 个诊断产物、全局诊断存储预算 512 MB，以先达到者为准触发清理
 - 清理必须至少在应用启动时、每次写入新诊断产物前，以及每次任务运行结束后执行一次
 - 写入新产物前必须检查存储容量水位；达到高水位时，应优先清理超出保留策略的旧产物，再决定是否继续写入
 - 清理策略首版固定为优先删除最旧的非终态无关截图与诊断产物；若清理后仍不足以写入新截图，则跳过该次截图写入并记录 `DIAG_ARTIFACT_STORAGE_LIMIT_REACHED`
 - 若当前界面命中强制抑制条件且无法在截图前完成脱敏，则执行器必须放弃保存截图，仅记录错误码和 `DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT` 一类的结构化原因
+- 若任务以 `blocked` 终态结束，且阻断发生在第一条动作步骤开始前，则默认不生成截图，只保留阻断错误码与上下文；若阻断发生在目标页面已进入前台之后，则仍按 `captureScreenshotOnFailure` 与 9.6 抑制规则决定是否保留截图
 - 因磁盘不足或保留策略触发清理时，必须记录结构化清理日志，避免把“截图缺失”误判为执行链路丢失
 
 ## 10. 运行控制与观察交互
@@ -984,6 +996,7 @@
 - `active_credential` 是否只在启用账号轮换的连续运行任务中使用
 - `input_text` 中 `text` 与 `textRef` 是否满足互斥约束
 - 步骤级 `retry.maxRetries` 是否为非负整数，并与任务级 `maxRetries` 使用一致的计数口径
+- `clearsSensitiveContext` 是否为布尔值，且只用于需要恢复默认截图策略的后续步骤
 - 敏感变量是否错误地使用了 `literal`
 - `selector` 和 `target` 是否符合对应规则
 
