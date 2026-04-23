@@ -38,20 +38,18 @@
 App UI
   |
 Application Service
-  |
-Task Repository ---- Scheduler ---- Runner Engine
-                       \
-                        \---- Boot/Alarm Receiver (recovery only)
-                                  |
-                           restore scheduling state
-  |
-Capability Facade
-  |
-+----------------+----------------+----------------+----------------+
-| Device Control | UI Inspector   | Vision Core    | Diagnostics    |
-+----------------+----------------+----------------+----------------+
-  |
-Runtime Store / Artifact Store
+  |           |                      |
+  v           v                      v
+Task       Scheduler ----------> Runner Engine
+Repository     |                      |
+          Boot/Alarm            Capability Facade
+          Receiver                    |
+          (recovery    +--------+--------+--------+------------+
+           only)       |Device  |   UI   | Vision | Diagnostics|
+               |       |Control | Insp.  |  Core  |            |
+          restore       +--------+--------+--------+------------+
+          sched.                       |
+          state        Runtime Store / Artifact Store
 ```
 
 ## 5. 模块划分
