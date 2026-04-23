@@ -87,44 +87,6 @@
 - `diagnostics` 字段交互语义见 2.6
 - `definitionStatus` 不是任务 JSON DSL 字段，而是系统根据原始配置解析与校验结果派生出的内部状态，取值与转移语义见 8.1
 
-### 2.5 `executionPolicy` 关键字段语义
-
-- `taskTimeoutMs`：单次任务运行超时时间
-- `maxRetries`：任务首次失败后的额外重试次数
-- `retryBackoffMs`：任务级重试退避时间
-- `conflictPolicy`：任务因目标 App 执行锁被占用而无法立即启动时的处理策略
-- `onMissedSchedule`：任务因设备离线、服务未运行或恢复后错过计划窗口时的处理策略，首版仅支持 `skip`
-
-计数口径说明：
-
-- 任务级 `maxRetries` 统计“额外重试次数”，不包含首次执行
-- 因此 `maxRetries = 0` 表示任务只执行 1 次，`maxRetries = 1` 表示任务最多执行 2 次
-- 步骤级 `retry.maxRetries` 使用同一口径，同样统计“额外重试次数”，不包含首次执行
-- UI、监控页和测试用例必须对任务级与步骤级重试使用同一展示口径，避免出现 off-by-one 歧义
-
-首版 `conflictPolicy` 支持：
-
-- `skip`：本次触发直接跳过，并记录冲突日志
-- `run_after_current`：等待当前已运行的任务实例自然结束后立即执行一次，但不允许中断正在执行的实例，也不累计排队多次执行
-
-首版 `onMissedSchedule` 支持：
-
-- `skip`：本次错过的计划窗口直接跳过，不补跑，并记录 `SCHED_MISSED_SKIPPED`
-
-补充约束：
-
-- `conflictPolicy` 只处理“目标 App 执行锁被占用”的场景，不等同于 `onMissedSchedule`
-- `onMissedSchedule` 只处理错过计划窗口的场景，不处理目标 App 执行锁被占用的场景；后者仍由 `conflictPolicy` 决定
-- `run_after_current` 首版主要用于 cron 任务与当前 continuous 任务实例冲突时的补偿执行
-- continuous 任务本身不建议使用 `run_after_current` 形成排队；连续任务默认在目标 App 空闲后再进入下一轮
-
-### 2.6 `diagnostics` 字段语义
-
-- `captureScreenshotOnFailure`：当任务运行进入 `failed`、`timed_out` 或 `blocked` 等终态失败时，尝试保留最终失败截图；若命中 9.6 中定义的抑制或存储退化条件，则改为记录明确原因
-- `captureScreenshotOnStepFailure`：当单个步骤尝试失败时，允许在步骤级记录失败截图；若该步骤随后重试成功，截图仍保留在步骤记录中但不重复生成任务级失败截图
-- 若某次失败同时满足步骤级失败与任务终态失败，且两个字段都为 `true`，首版只生成一份截图或一条抑制原因记录，并在步骤记录与任务汇总中共享引用
-- 若两个字段都为 `false`，系统仍必须保留结构化错误码和失败上下文，不允许因为关闭截图而丢失可定位性
-
 ### 2.3 触发方式
 
 #### cron
@@ -206,6 +168,44 @@
 - 首版不支持因失败次数自动摘除、冻结或跳过某个账号；账号是否保留在轮换中仅由用户配置决定
 - 连续运行会话执行中对账号组启停或顺序的修改只从下一轮开始生效，不得影响当前轮正在使用的账号
 - 若下一轮开始前目标 `CredentialSet` 已无启用账号，则当前会话必须以 `blocked` 终止，并记录最后错误码
+
+### 2.5 `executionPolicy` 关键字段语义
+
+- `taskTimeoutMs`：单次任务运行超时时间
+- `maxRetries`：任务首次失败后的额外重试次数
+- `retryBackoffMs`：任务级重试退避时间
+- `conflictPolicy`：任务因目标 App 执行锁被占用而无法立即启动时的处理策略
+- `onMissedSchedule`：任务因设备离线、服务未运行或恢复后错过计划窗口时的处理策略，首版仅支持 `skip`
+
+计数口径说明：
+
+- 任务级 `maxRetries` 统计“额外重试次数”，不包含首次执行
+- 因此 `maxRetries = 0` 表示任务只执行 1 次，`maxRetries = 1` 表示任务最多执行 2 次
+- 步骤级 `retry.maxRetries` 使用同一口径，同样统计“额外重试次数”，不包含首次执行
+- UI、监控页和测试用例必须对任务级与步骤级重试使用同一展示口径，避免出现 off-by-one 歧义
+
+首版 `conflictPolicy` 支持：
+
+- `skip`：本次触发直接跳过，并记录冲突日志
+- `run_after_current`：等待当前已运行的任务实例自然结束后立即执行一次，但不允许中断正在执行的实例，也不累计排队多次执行
+
+首版 `onMissedSchedule` 支持：
+
+- `skip`：本次错过的计划窗口直接跳过，不补跑，并记录 `SCHED_MISSED_SKIPPED`
+
+补充约束：
+
+- `conflictPolicy` 只处理“目标 App 执行锁被占用”的场景，不等同于 `onMissedSchedule`
+- `onMissedSchedule` 只处理错过计划窗口的场景，不处理目标 App 执行锁被占用的场景；后者仍由 `conflictPolicy` 决定
+- `run_after_current` 首版主要用于 cron 任务与当前 continuous 任务实例冲突时的补偿执行
+- continuous 任务本身不建议使用 `run_after_current` 形成排队；连续任务默认在目标 App 空闲后再进入下一轮
+
+### 2.6 `diagnostics` 字段语义
+
+- `captureScreenshotOnFailure`：当任务运行进入 `failed`、`timed_out` 或 `blocked` 等终态失败时，尝试保留最终失败截图；若命中 9.6 中定义的抑制或存储退化条件，则改为记录明确原因
+- `captureScreenshotOnStepFailure`：当单个步骤尝试失败时，允许在步骤级记录失败截图；若该步骤随后重试成功，截图仍保留在步骤记录中但不重复生成任务级失败截图
+- 若某次失败同时满足步骤级失败与任务终态失败，且两个字段都为 `true`，首版只生成一份截图或一条抑制原因记录，并在步骤记录与任务汇总中共享引用
+- 若两个字段都为 `false`，系统仍必须保留结构化错误码和失败上下文，不允许因为关闭截图而丢失可定位性
 
 ## 3. 变量与凭据模型
 
