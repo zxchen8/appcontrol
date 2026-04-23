@@ -39,9 +39,11 @@ App UI
   |
 Application Service
   |
-Task Repository ---- Scheduler ---- Boot/Alarm Receiver
-  |
-Runner Engine
+Task Repository ---- Scheduler ---- Runner Engine
+                       \
+                        \---- Boot/Alarm Receiver (recovery only)
+                                  |
+                           restore scheduling state
   |
 Capability Facade
   |
