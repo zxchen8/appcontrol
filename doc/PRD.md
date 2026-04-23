@@ -134,7 +134,7 @@
 
 补充说明：
 
-- 调度优先级、执行冲突处理和 continuous 并存策略属于设计层约束，详见 [HIGH_LEVEL_DESIGN.md](HIGH_LEVEL_DESIGN.md) 与 [DETAILED_DESIGN.md](DETAILED_DESIGN.md)
+- 调度优先级、执行冲突处理和 continuous 并存策略属于设计层约束，详见 [HIGH_LEVEL_DESIGN.md](HIGH_LEVEL_DESIGN.md)
 
 ### 9.4 账号轮换能力
 
@@ -182,7 +182,7 @@
 
 补充说明：
 
-- 多任务并存、cron 插入时机和实例级调度顺序属于设计层语义，详见 [HIGH_LEVEL_DESIGN.md](HIGH_LEVEL_DESIGN.md) 与 [DETAILED_DESIGN.md](DETAILED_DESIGN.md)
+- 多任务并存、cron 插入时机和实例级调度顺序属于设计层语义，详见 [HIGH_LEVEL_DESIGN.md](HIGH_LEVEL_DESIGN.md)
 
 ### 10.1 首版运行观察方式
 
@@ -225,7 +225,7 @@
 
 ## 13. 成功指标
 
-- 固定流程任务在稳定测试环境中的成功率达到 95% 以上
+- 固定流程任务在稳定测试环境中的成功率达到 95% 以上（成功率定义：单次任务实例从启动到所有步骤完成且状态为 `SUCCEEDED` 视为成功；以任务实例为统计粒度，不以步骤为粒度）
 - 单台测试机可连续稳定运行 72 小时，无严重崩溃或调度失效
 - 连续循环任务可在同一会话内完成多账号轮换，并可明确追踪每轮使用的账号
 - 新增一个固定流程任务的平均配置时间控制在 30 分钟以内
