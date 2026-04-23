@@ -39,9 +39,7 @@ App UI
   |
 Application Service
   |
-Task Repository ---- Credential Repository
-  |
-Scheduler ---- Boot Receiver / AlarmManager（恢复辅助）
+Task Repository ---- Scheduler ---- Boot/Alarm Receiver
   |
 Runner Engine
   |
@@ -54,11 +52,6 @@ Capability Facade
 Runtime Store / Artifact Store
 ```
 
-架构说明：
-
-- `Boot Receiver / AlarmManager` 仅作为调度恢复辅助手段，不是调度主链路；主链路由前台调度服务直接触发
-- `Credential Repository` 独立于 `Task Repository`，通过 `CredentialRepository` 接口向调度层和执行引擎提供账号解析能力，不直接参与调度主链路
-
 ## 5. 模块划分
 
 ### 5.1 app-ui
@@ -67,7 +60,7 @@ Runtime Store / Artifact Store
 
 - 展示任务列表、任务配置导入与原始编辑、运行记录、环境检查和账号配置
 - 触发手动真实执行
-- 展示运行状态、失败截图和错误信息
+- 展示运行状态、失败截图或截图抑制原因，以及错误信息
 - 提供运行监控页，用于查看当前任务、当前步骤和最近失败上下文
 
 不负责：
@@ -108,14 +101,20 @@ Runtime Store / Artifact Store
 - 当存在已启用的定时任务时，系统进入“调度待命”状态，并启动单一前台调度服务
 - 前台调度服务按分钟边界检查到期任务，到期后再交由 `runner-engine` 执行
 - `trigger.type = continuous` 时，由前台调度服务在本轮结束并达到冷却时间后调度下一轮
+- `manual` 不作为任务 DSL 的 `trigger.type`；本机手动真实执行由 app-service/UI 直接发起，不进入 scheduler
+- `definitionStatus != ready` 的任务不得进入调度待命或被 scheduler 选中执行；这里的 `definitionStatus` 为系统内部派生状态，取值与转移语义见 [DETAILED_DESIGN.md](DETAILED_DESIGN.md)
+- `conflictPolicy` 只处理目标 App 执行锁被占用的场景
+- `onMissedSchedule` 只处理设备离线、服务未运行或恢复后错过计划窗口的场景；首版仅支持 `skip`
 - 同一目标 App 通过统一执行锁串行化任务实例；调度层不得绕过该锁直接启动执行
 - 调度优先级首版固定为：到期 cron 任务高于下一轮 continuous 任务
 - 若 cron 到期时 continuous 当前任务实例已在执行，则允许该实例自然结束；结束后先处理 cron，再决定是否启动下一个 continuous 实例
 - 同一目标 App 可同时启用多个 continuous 任务，但 scheduler 每次只选择一个 continuous 任务实例执行
-- 多个 continuous 任务并存时，实例结束后按稳定轮转顺序选择下一个候选任务；在真正启动前必须再次检查是否已有到期 cron
+- 多个 continuous 任务并存时，实例结束后按稳定轮转顺序选择下一个候选任务；首版默认以 `taskId` 升序形成稳定顺序，并从当前任务的后继任务开始查找下一候选；在真正启动前必须再次检查是否已有到期 cron
 - 多个 cron 任务同时到期时，按计划触发时间升序处理；同时间点使用稳定顺序避免随机性
 - 连续运行任务如配置账号轮换，调度层负责维护账号组游标，并在轮次开始前选出本轮账号
 - `persistCursor = true` 时，调度层必须在每轮结束后持久化下一账号游标，并在服务恢复或设备重启后继续使用
+- 同一 continuous 任务在任一时刻最多只允许一个 `status = running` 的连续运行会话；已进入终态的会话不得恢复
+- 这里的“服务恢复”特指前台调度服务因进程重启被重建，或设备重启后重新拉起调度服务；仅当上一会话仍处于运行态时才允许恢复
 - 单轮失败后的连续运行处理由账号轮换策略决定；首版默认继续下一个账号，也支持直接停止整个会话
 - `onCycleFailure = continue_next` 只表示切换到下一个账号继续运行，不自动将失败账号移出后续轮换
 - `AlarmManager` 只用于开机恢复和前台调度服务意外退出后的恢复，不作为首版调度主链路
@@ -132,6 +131,12 @@ Runtime Store / Artifact Store
 - 统一输出运行状态、步骤结果和轮次结果
 
 这是系统核心，必须按状态机思维实现，而不是用页面回调串逻辑。
+
+首版状态机至少应覆盖以下主状态：
+
+- `idle -> preparing -> running_step`
+- `running_step -> retrying_step | retrying_task | success | failed | timed_out | cancelled | blocked`
+- 进入终态后只能通过创建新的运行实例重新开始，不允许在 UI 回调中隐式回退状态
 
 ### 5.6 capability-facade
 
@@ -162,6 +167,7 @@ Runtime Store / Artifact Store
 
 - 该能力必须通过独立的 `AccessibilityService` 组件实现，而不是普通页面组件或工具类直接替代
 - 其生命周期独立于 Activity，需要在环境检查页中明确检查启用状态
+- 为保证可测试性，该组件应通过可替换的节点查询/动作接口向 `capability-facade` 暴露能力；单元测试使用 fake node tree adapter，设备测试覆盖服务绑定、启用检测和基础查询/点击闭环
 
 ### 5.9 platform/vision
 
@@ -186,22 +192,7 @@ Runtime Store / Artifact Store
 - 任务定义、连续运行会话记录、运行记录、步骤记录、错误码和调度信息存储
 - 账号组游标和连续运行恢复状态存储
 - 账号维度聚合结果和最近失败上下文存储
-
-### 5.11 凭据管理（credential）
-
-职责：
-
-- 管理 `CredentialProfile`（测试账号元数据与加密敏感字段）
-- 管理 `CredentialSet`（账号组定义及顺序关系）
-- 向调度层和执行引擎提供当前轮次账号解析（`active_credential`）
-- 账号引用完整性校验（删除前检查是否被任务引用）
-- 敏感字段加解密，密钥由 Android Keystore 管理
-
-约束：
-
-- 凭据模块对外只暴露 `CredentialRepository` 接口，不直接暴露 Room Entity 或加密实现细节
-- 账号敏感字段解密操作只允许在本模块内发生
-- 对应的数据模型与接口定义详见 [DETAILED_DESIGN.md §3](DETAILED_DESIGN.md)
+- 本地诊断产物保留上限、容量水位检查和自动清理
 
 ## 6. 核心数据流
 
@@ -210,11 +201,14 @@ Runtime Store / Artifact Store
 1. 用户在 UI 选择任务并点击运行。
 2. app-service 读取任务和本地变量配置。
 3. task-dsl 解析并校验任务定义。
-4. runner-engine 创建运行实例并获取执行锁。
-5. capability-facade 按步骤调用底层能力模块。
-6. diagnostics 和 runtime-store 持久化步骤结果、日志和截图。
-7. 前台服务通知展示运行中状态，并提供停止入口。
-8. UI 监控页展示当前步骤、最终结果与失败上下文。
+4. 若 `definitionStatus != ready`，app-service 必须在创建运行实例前直接阻断手动执行，并把最近一次校验错误返回给 UI。
+5. runner-engine 创建运行实例并获取执行锁。
+6. capability-facade 按步骤调用底层能力模块。
+7. diagnostics 和 runtime-store 持久化步骤结果、日志和诊断证据；若截图因敏感内容被抑制，则同时持久化明确抑制原因。
+8. 前台服务通知展示运行中状态，并提供停止入口。
+9. UI 监控页展示当前步骤、最终结果与失败上下文。
+
+手动真实执行是应用级入口，不进入 scheduler，也不作为任务 DSL 的 `trigger.type`。
 
 ### 6.2 连续循环执行
 
@@ -223,7 +217,7 @@ Runtime Store / Artifact Store
 3. 调度层按账号组游标选出当前轮次使用的账号。
 4. runner-engine 用该账号执行这一轮任务步骤。
 5. diagnostics 和 runtime-store 记录 `sessionId`、`cycleNo`、`credentialProfileId` 和轮次结果。
-6. 当前实例结束后，scheduler 先检查是否有到期 cron；若无，再按稳定轮转顺序选择下一个 continuous 任务实例。
+6. 当前实例结束后，scheduler 先检查是否有到期 cron；若有，则先按计划触发时间与稳定顺序处理到期 cron。若 cron 只是因为当前 continuous 实例刚才占用执行锁而延后，则按详细设计中的 `conflictPolicy` 处理；只有设备离线、服务未运行或恢复后错过计划窗口时，才适用 `onMissedSchedule`。若无到期 cron，再按稳定轮转顺序选择下一个 continuous 任务实例。
 
 ### 6.3 首版运行交互方案
 
@@ -344,7 +338,7 @@ data 层首版落地建议：
 - 环境检查页：展示 Android 版本、root、无障碍、通知、目标 App 安装状态，以及定时调度相关运行前条件
 - 任务列表页：展示任务、启停任务、手动运行入口
 - 任务配置导入/原始编辑页：导入 JSON、编辑原始配置、执行基础校验
-- 运行监控页：查看当前任务、当前轮次、当前账号、最近日志、最近失败截图
+- 运行监控页：查看当前任务、当前轮次、当前账号、最近日志、最近失败截图或截图抑制原因
 - 运行记录页：查看历史运行结果、轮次详情和账号维度结果
 - 账号配置页：管理测试账号、账号组与变量引用
 
@@ -397,7 +391,7 @@ data 层首版落地建议：
 - 元素等待与元素定位
 - 本地变量与账号配置
 - 账号组顺序轮换
-- 运行日志与失败截图
+- 运行日志与诊断证据
 - rooted 环境检查
 
 首版 UI 范围说明：
@@ -421,3 +415,30 @@ data 层首版落地建议：
 - 任务模板复用
 - 结构化任务编辑器
 - 悬浮边缘胶囊调试模式
+
+### 9.3 v1 不做
+
+- 多设备集中管理
+- 远程日志上传
+- 报告导出
+- 模板管理界面
+- 录制回放
+
+### 9.4 里程碑建议
+
+- `M0`：工程骨架、基础依赖、日志与错误码抽象
+- `M1`：任务 DSL、Room 存储、账号配置
+- `M2`：手动真实执行闭环
+- `M3`：定时执行闭环
+- `M4`：图像与 OCR 增强能力
+
+## 10. 已冻结技术决策
+
+- `image_find` 不纳入第一批实现，优先把元素定位、截图排障、变量替换和调度链路跑稳；图像找点放入后续增强阶段
+- 本地凭据存储采用 Room + Keystore：Room 管理凭据 profile 元数据和索引，敏感字段通过 Keystore 保护的密钥加密后落库
+- DataStore 不用于敏感凭据，只保留给未来的非敏感轻量设置
+- `restart_app` 在首版不要求独立执行器，可由 `stop_app` + `start_app` 组合实现
+- 主动 `capture_screenshot` 步骤不纳入首批实现，首版只要求失败自动截图和诊断链路
+- 首版运行控制采用 App 内入口 + 前台服务通知 + 运行监控页的组合方案，不以悬浮窗作为默认交互
+- 首版调度采用“前台执行服务 + AlarmManager 唤醒/恢复”的组合方案，不单独依赖精确闹钟能力
+- 首版账号轮换仅支持基于有序账号组的顺序轮换，不支持随机、加权或复杂筛选规则
