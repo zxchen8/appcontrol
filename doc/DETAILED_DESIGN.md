@@ -103,8 +103,8 @@
 
 字段说明：
 
-- `expression`：分钟级 5 段 cron 表达式
-- `timezone`：调度时区
+- `expression`：分钟级 5 段 cron 表达式，必填
+- `timezone`：调度时区，必填，须为合法的 IANA 时区标识符（如 `Asia/Shanghai`、`UTC`）
 
 #### continuous
 
@@ -202,7 +202,7 @@
 
 ### 2.6 `diagnostics` 字段语义
 
-- `captureScreenshotOnFailure`：当任务运行进入 `failed`、`timed_out` 或 `blocked` 等终态失败时，尝试保留最终失败截图；若命中 9.6 中定义的抑制或存储退化条件，则改为记录明确原因
+- `captureScreenshotOnFailure`：当任务运行进入 `failed` 或 `timed_out` 终态时，尝试保留最终失败截图；进入 `blocked` 终态时，截图行为由 9.6 中对阻断时机的规定决定（阻断发生在第一条动作步骤开始前时默认不生成截图，阻断发生在目标页面已进入前台后时仍按本字段与 9.6 抑制规则决定）；以上情形若命中 9.6 中定义的抑制或存储退化条件，则改为记录明确原因
 - `captureScreenshotOnStepFailure`：当单个步骤尝试失败时，允许在步骤级记录失败截图；若该步骤随后重试成功，截图仍保留在步骤记录中但不重复生成任务级失败截图
 - 若某次失败同时满足步骤级失败与任务终态失败，且两个字段都为 `true`，首版只生成一份截图或一条抑制原因记录，并在步骤记录与任务汇总中共享引用
 - 若两个字段都为 `false`，系统仍必须保留结构化错误码和失败上下文，不允许因为关闭截图而丢失可定位性
@@ -482,7 +482,7 @@
 
 关键参数：
 
-- `selector`
+- `selector`：选填；未填时向当前焦点元素输入
 - `text`
 - `textRef`
 - `clearBeforeInput`
@@ -507,7 +507,7 @@
 关键参数：
 
 - `selector`
-- `state`
+- `state`：等待的目标状态，必填；首版支持 `visible`（等待元素出现）和 `gone`（等待元素消失）
 
 ### 5.8 `image_find`
 
@@ -571,6 +571,8 @@
 
 ### 6.2 target
 
+`element` 示例（首版主要定位方式）：
+
 ```json
 {
   "kind": "element",
@@ -581,12 +583,22 @@
 }
 ```
 
+`coordinate` 示例（基于屏幕绝对坐标，单位：像素）：
+
+```json
+{
+  "kind": "coordinate",
+  "x": 540,
+  "y": 960
+}
+```
+
 允许的 `kind`：
 
-- `element`
-- `ocr_text`
-- `image`
-- `coordinate`
+- `element`：通过无障碍节点树定位；首版主要方式
+- `coordinate`：屏幕绝对坐标，必须指定 `x` 和 `y`
+- `ocr_text`：OCR 文本定位；属于后续增强能力，首版不启用
+- `image`：模板图像匹配；属于后续增强能力，首版不启用
 
 定位优先级：元素 > OCR > 图像 > 坐标。
 
@@ -946,7 +958,7 @@
 
 建议统一前缀：
 
-- `ENV_`：环境问题
+- `ENV_`：环境问题（root、无障碍、凭据密钥等运行前置环境不满足）
 - `TASK_`：任务配置问题
 - `STEP_`：步骤定义或能力问题
 - `CTRL_`：控制动作失败
@@ -954,13 +966,16 @@
 - `OCR_`：OCR 失败
 - `IMG_`：图像匹配失败
 - `SCHED_`：调度失败
+- `CRED_`：凭据与账号组问题（账号组无可用账号、凭据格式非法等）
 - `DIAG_`：诊断产物生成、保留或抑制相关问题
 
 示例：
 
 - `ENV_ROOT_NOT_READY`
+- `ENV_ACCESSIBILITY_NOT_ENABLED`
 - `ENV_CREDENTIAL_KEY_UNAVAILABLE`
 - `TASK_SCHEMA_INVALID`
+- `TASK_DEFINITION_NOT_READY`
 - `STEP_TIMEOUT`
 - `STEP_CAPABILITY_UNAVAILABLE`
 - `CTRL_START_APP_FAILED`
@@ -970,6 +985,7 @@
 - `SCHED_CONFLICT_SKIPPED`
 - `SCHED_CONFLICT_DELAYED`
 - `SCHED_MISSED_SKIPPED`
+- `CRED_SET_NO_ENABLED_ACCOUNT`
 - `DIAG_ARTIFACT_STORAGE_LIMIT_REACHED`
 - `DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT`
 
@@ -978,11 +994,12 @@
 首版至少校验以下内容：
 
 - 顶层字段是否齐全
-- `taskId` 是否唯一且格式合法
+- `taskId` 格式是否合法（仅含小写字母、数字和中划线）；`taskId` 唯一性校验需查询持久化存储，由 app-service 在导入任务时通过 TaskRepository 负责，task-dsl 解析层只校验格式
 - `schemaVersion` 是否受支持
 - `trigger.type` 是否受支持（首版仅 `cron`、`continuous`；`manual` 仅作为运行来源，不作为任务 DSL 的 `trigger.type`）
 - `trigger.type = cron` 时 cron 表达式是否合法
-- `trigger.type = continuous` 时 `cooldownMs`、`maxCycles`、`maxDurationMs` 是否满足范围要求
+- `trigger.type = cron` 时 `timezone` 是否为合法的 IANA 时区标识符
+- `trigger.type = continuous` 时 `cooldownMs`（须 ≥ 0）、`maxCycles`（若非 null 则须 ≥ 1）、`maxDurationMs`（若非 null 则须 ≥ 1）是否满足范围要求
 - `accountRotation` 是否只在 `trigger.type = continuous` 时使用
 - `credentialSetId` 是否存在且至少包含一个可用账号
 - `onCycleFailure` 是否为支持的枚举值
@@ -1002,7 +1019,9 @@
 
 ## 13. 示例任务
 
-以下示例表示“重启 App，等待首页出现，再输入账号并点击登录按钮”：
+以下示例表示"重启 App，等待登录页出现，再输入账号密码并点击登录按钮"。示例重点展示：
+- 用户名与密码变量的声明方式（密码使用 `sensitive: true`）
+- 敏感输入后通过 `clearsSensitiveContext = true` 恢复默认截图策略
 
 ```json
 {
@@ -1036,6 +1055,12 @@
       "source": "credential_profile",
       "profileId": "smoke-account-01",
       "field": "username"
+    },
+    "ACCOUNT_PASSWORD": {
+      "source": "credential_profile",
+      "profileId": "smoke-account-01",
+      "field": "password",
+      "sensitive": true
     }
   },
   "steps": [
@@ -1051,15 +1076,15 @@
       }
     },
     {
-      "id": "step-wait-home",
+      "id": "step-wait-login",
       "type": "wait_element",
       "timeoutMs": 15000,
       "retry": { "maxRetries": 0, "backoffMs": 1000 },
       "onFailure": "stop_task",
       "params": {
         "selector": {
-          "by": "text",
-          "value": "首页"
+          "by": "resourceId",
+          "value": "com.example.target:id/phone"
         },
         "state": "visible"
       }
@@ -1080,11 +1105,27 @@
       }
     },
     {
+      "id": "step-input-password",
+      "type": "input_text",
+      "timeoutMs": 10000,
+      "retry": { "maxRetries": 0, "backoffMs": 1000 },
+      "onFailure": "stop_task",
+      "params": {
+        "selector": {
+          "by": "resourceId",
+          "value": "com.example.target:id/password"
+        },
+        "textRef": "ACCOUNT_PASSWORD",
+        "clearBeforeInput": true
+      }
+    },
+    {
       "id": "step-tap-login",
       "type": "tap",
       "timeoutMs": 10000,
       "retry": { "maxRetries": 1, "backoffMs": 1000 },
       "onFailure": "stop_task",
+      "clearsSensitiveContext": true,
       "params": {
         "target": {
           "kind": "element",
@@ -1104,3 +1145,10 @@
   "tags": ["smoke", "login"]
 }
 ```
+
+示例说明：
+
+- `ACCOUNT_PASSWORD` 声明了 `"sensitive": true`；从 `step-input-password` 开始执行时，执行引擎把运行时标记 `sensitiveContextActive` 置为 `true`
+- 密码输入步骤和登录按钮点击步骤失败时，截图被强制抑制，改为记录 `DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT`
+- `step-tap-login` 携带 `"clearsSensitiveContext": true`；该步骤成功后执行引擎清除 `sensitiveContextActive`，后续步骤失败截图恢复默认开启策略
+- 若 `step-tap-login` 失败（含重试耗尽），`sensitiveContextActive` 仍为 `true`，截图继续被抑制
