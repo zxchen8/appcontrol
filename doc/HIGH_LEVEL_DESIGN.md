@@ -203,11 +203,12 @@ Runtime Store / Artifact Store
 1. 用户在 UI 选择任务并点击运行。
 2. app-service 读取任务和本地变量配置。
 3. task-dsl 解析并校验任务定义。
-4. runner-engine 创建运行实例并获取执行锁。
-5. capability-facade 按步骤调用底层能力模块。
-6. diagnostics 和 runtime-store 持久化步骤结果、日志和诊断证据；若截图因敏感内容被抑制，则同时持久化明确抑制原因。
-7. 前台服务通知展示运行中状态，并提供停止入口。
-8. UI 监控页展示当前步骤、最终结果与失败上下文。
+4. 若 `definitionStatus != ready`，app-service 必须在创建运行实例前直接阻断手动执行，并把最近一次校验错误返回给 UI。
+5. runner-engine 创建运行实例并获取执行锁。
+6. capability-facade 按步骤调用底层能力模块。
+7. diagnostics 和 runtime-store 持久化步骤结果、日志和诊断证据；若截图因敏感内容被抑制，则同时持久化明确抑制原因。
+8. 前台服务通知展示运行中状态，并提供停止入口。
+9. UI 监控页展示当前步骤、最终结果与失败上下文。
 
 手动真实执行是应用级入口，不进入 scheduler，也不作为任务 DSL 的 `trigger.type`。
 
