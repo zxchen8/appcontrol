@@ -1,1 +1,15 @@
 investor.apk.raw
+
+# Android/Gradle generated files
+.gradle/
+build/
+app/build/
+local.properties
+
+# IDE files
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
