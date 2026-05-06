@@ -39,7 +39,7 @@ class RootDeviceControlPort(
             }
         }
 
-        val commandResult = shell.run("input text ${escapeInputText(request.text)}")
+        val commandResult = shell.run("input text ${quoteInputTextArgument(request.text)}")
         if (commandResult.exitCode != 0) {
             return CapabilityResult.Failure(
                 errorCode = CapabilityFailureCode.STEP_EXECUTION_FAILED,
@@ -79,17 +79,16 @@ class RootDeviceControlPort(
         return null
     }
 
-    private fun escapeInputText(rawText: String): String = buildString(rawText.length) {
+    private fun quoteInputTextArgument(rawText: String): String = buildString(rawText.length + 2) {
+        append('\'')
         rawText.forEach { character ->
             when (character) {
-                ' ' -> append("%s")
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                '\'' -> append("\\'")
-                '$', '&', '|', ';', '<', '>', '(', ')' -> append('\\').append(character)
+                ' ', '\n', '\r', '\t' -> append("%s")
+                '\'' -> append("'\"'\"'")
                 else -> append(character)
             }
         }
+        append('\'')
     }
 
     private fun ElementSelector.toSummary(): String =

@@ -49,6 +49,27 @@ class DefaultAccessibilityPortTest {
     }
 
     @Test
+    fun shouldReturnCapabilityUnavailableWhenAccessibilityServiceIsDisconnected() = runBlocking {
+        val adapter = ScriptedNodeTreeAdapter(
+            responses = emptyList(),
+            available = false,
+        )
+        val port = DefaultAccessibilityPort(
+            nodeTreeAdapter = adapter,
+            pauseController = NoOpPauseController,
+            pollIntervalMs = 1_000L,
+        )
+
+        val result = port.tap(ElementSelector(SelectorType.TEXT, "登录"))
+
+        assertTrue(result is CapabilityResult.Failure)
+        assertEquals(
+            CapabilityFailureCode.STEP_CAPABILITY_UNAVAILABLE,
+            (result as CapabilityResult.Failure).errorCode,
+        )
+    }
+
+    @Test
     fun shouldWaitUntilElementAppearsWithinTimeout() = runBlocking {
         val adapter = ScriptedNodeTreeAdapter(
             responses = listOf(
@@ -99,9 +120,12 @@ class DefaultAccessibilityPortTest {
 
     private class ScriptedNodeTreeAdapter(
         private val responses: List<AccessibilityNodeSnapshot?>,
+        private val available: Boolean = true,
     ) : NodeTreeAdapter {
         var findCalls: Int = 0
         val clickedNodeIds = mutableListOf<String>()
+
+        override fun isAvailable(): Boolean = available
 
         override suspend fun findFirst(selector: ElementSelector): AccessibilityNodeSnapshot? {
             val index = findCalls.coerceAtMost(responses.lastIndex)

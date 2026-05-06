@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AppControl</string>
+    <string name="accessibility_service_label">AppControl Accessibility</string>
+    <string name="accessibility_service_description">为任务执行提供元素查询、等待和点击能力。</string>
 </resources>

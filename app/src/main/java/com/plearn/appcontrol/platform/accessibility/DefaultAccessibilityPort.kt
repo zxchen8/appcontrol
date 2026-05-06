@@ -13,6 +13,13 @@ class DefaultAccessibilityPort(
     private val pollIntervalMs: Long = 250L,
 ) : AccessibilityPort {
     override suspend fun tap(selector: ElementSelector): CapabilityResult<Unit> {
+        if (!nodeTreeAdapter.isAvailable()) {
+            return CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_CAPABILITY_UNAVAILABLE,
+                message = "Accessibility capability is not available.",
+            )
+        }
+
         val node = nodeTreeAdapter.findFirst(selector)
             ?: return CapabilityResult.Failure(
                 errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
@@ -34,10 +41,24 @@ class DefaultAccessibilityPort(
         state: WaitElementState,
         timeoutMs: Long,
     ): CapabilityResult<Unit> {
+        if (!nodeTreeAdapter.isAvailable()) {
+            return CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_CAPABILITY_UNAVAILABLE,
+                message = "Accessibility capability is not available.",
+            )
+        }
+
         val safePollIntervalMs = pollIntervalMs.coerceAtLeast(1L)
         val attemptCount = (timeoutMs.coerceAtLeast(0L) / safePollIntervalMs) + 1
 
         for (attempt in 0 until attemptCount) {
+            if (!nodeTreeAdapter.isAvailable()) {
+                return CapabilityResult.Failure(
+                    errorCode = CapabilityFailureCode.STEP_CAPABILITY_UNAVAILABLE,
+                    message = "Accessibility capability became unavailable.",
+                )
+            }
+
             val isPresent = nodeTreeAdapter.findFirst(selector) != null
             val matched = when (state) {
                 WaitElementState.APPEARED -> isPresent
@@ -61,9 +82,12 @@ class DefaultAccessibilityPort(
 
 data class AccessibilityNodeSnapshot(
     val nodeId: String,
+    val selector: ElementSelector? = null,
 )
 
 interface NodeTreeAdapter {
+    fun isAvailable(): Boolean = true
+
     suspend fun findFirst(selector: ElementSelector): AccessibilityNodeSnapshot?
 
     suspend fun click(node: AccessibilityNodeSnapshot): Boolean

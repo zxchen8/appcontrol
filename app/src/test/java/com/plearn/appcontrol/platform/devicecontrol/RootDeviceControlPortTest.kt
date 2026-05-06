@@ -78,7 +78,7 @@ class RootDeviceControlPortTest {
         )
 
         assertTrue(result is CapabilityResult.Success<*>)
-        assertEquals(listOf("input text secret%spassword"), shell.commands)
+        assertEquals(listOf("input text 'secret%spassword'"), shell.commands)
         val summary = (result as CapabilityResult.Success<InputTextSummary>).value
         assertEquals("resourceId=com.example.target:id/password", summary.selectorSummary)
         assertEquals(InputTextSource.VARIABLE_REFERENCE, summary.source)
@@ -102,7 +102,7 @@ class RootDeviceControlPortTest {
         assertEquals(
             listOf(
                 "input keyevent KEYCODE_MOVE_END && input keyevent --longpress KEYCODE_DEL",
-                "input text secret%spassword",
+                "input text 'secret%spassword'",
             ),
             shell.commands,
         )
@@ -116,7 +116,18 @@ class RootDeviceControlPortTest {
         val result = port.inputText(InputTextRequest(text = "pa\$\$ word&1"))
 
         assertTrue(result is CapabilityResult.Success<*>)
-        assertEquals(listOf("input text pa\\$\\$%sword\\&1"), shell.commands)
+        assertEquals(listOf("input text 'pa\$\$%sword&1'"), shell.commands)
+    }
+
+    @Test
+    fun shouldQuoteShellArgumentWhenInputContainsControlOrShellCharacters() = runBlocking {
+        val shell = RecordingRootShellPort()
+        val port = RootDeviceControlPort(shell)
+
+        val result = port.inputText(InputTextRequest(text = "ok`\nreboot'soon"))
+
+        assertTrue(result is CapabilityResult.Success<*>)
+        assertEquals(listOf("input text 'ok`%sreboot'\"'\"'soon'"), shell.commands)
     }
 
     @Test
