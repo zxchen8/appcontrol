@@ -5,19 +5,19 @@ import com.plearn.appcontrol.data.model.TaskRunRecord
 import com.plearn.appcontrol.dsl.TaskDslParser
 import com.plearn.appcontrol.runner.RunTriggerType
 import com.plearn.appcontrol.runner.RunnerFailureCode
+import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.RunnerTimeSource
+import com.plearn.appcontrol.runner.NoOpTaskExecutionRecorder
 import com.plearn.appcontrol.runner.SystemRunnerTimeSource
 import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
 import java.util.UUID
-import javax.inject.Inject
-import javax.inject.Singleton
 
-@Singleton
-class ManualTaskExecutionService @Inject constructor(
+class ManualTaskExecutionService(
     private val parser: TaskDslParser,
     private val taskRunner: TaskRunner,
+    private val executionRecorder: TaskExecutionRecorder = NoOpTaskExecutionRecorder,
     private val timeSource: RunnerTimeSource = SystemRunnerTimeSource,
     private val runIdFactory: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -40,7 +40,8 @@ class ManualTaskExecutionService @Inject constructor(
             )
         }
 
-        return taskRunner.run(task = task, triggerType = RunTriggerType.MANUAL)
+        val execution = taskRunner.run(task = task, triggerType = RunTriggerType.MANUAL)
+        return executionRecorder.record(execution)
     }
 
     private fun blocked(

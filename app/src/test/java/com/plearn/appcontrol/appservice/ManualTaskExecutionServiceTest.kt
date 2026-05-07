@@ -9,6 +9,7 @@ import com.plearn.appcontrol.runner.RunnerFailureCode
 import com.plearn.appcontrol.runner.RunnerTimeSource
 import com.plearn.appcontrol.runner.StepRunStatus
 import com.plearn.appcontrol.runner.TaskExecutionResult
+import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
 import kotlinx.coroutines.runBlocking
@@ -21,9 +22,11 @@ class ManualTaskExecutionServiceTest {
     @Test
     fun shouldBlockManualRunWhenDefinitionStatusIsNotReady() = runBlocking {
         val runner = RecordingTaskRunner()
+        val recorder = RecordingTaskExecutionRecorder()
         val service = ManualTaskExecutionService(
             parser = TaskDslParser(),
             taskRunner = runner,
+            executionRecorder = recorder,
             timeSource = FixedRunnerTimeSource(),
             runIdFactory = { "blocked-run" },
         )
@@ -44,14 +47,17 @@ class ManualTaskExecutionServiceTest {
         assertEquals(RunnerFailureCode.RUNNER_TASK_NOT_READY, result.taskRun.errorCode)
         assertTrue(result.stepRuns.isEmpty())
         assertEquals(0, runner.invocationCount)
+        assertEquals(0, recorder.recordCount)
     }
 
     @Test
     fun shouldParseReadyRecordAndDelegateToRunner() = runBlocking {
         val runner = RecordingTaskRunner()
+        val recorder = RecordingTaskExecutionRecorder()
         val service = ManualTaskExecutionService(
             parser = TaskDslParser(),
             taskRunner = runner,
+            executionRecorder = recorder,
             timeSource = FixedRunnerTimeSource(),
             runIdFactory = { "manual-run" },
         )
@@ -73,6 +79,35 @@ class ManualTaskExecutionServiceTest {
         assertEquals(RunTriggerType.MANUAL, runner.lastTriggerType)
         assertEquals(TaskRunStatus.SUCCESS, result.taskRun.status)
         assertEquals(listOf(StepRunStatus.SUCCESS), result.stepRuns.map { it.status })
+        assertEquals(1, recorder.recordCount)
+    }
+
+    @Test
+    fun shouldPersistRecordedManualRunAfterRunnerCompletes() = runBlocking {
+        val runner = RecordingTaskRunner()
+        val recorder = RecordingTaskExecutionRecorder()
+        val service = ManualTaskExecutionService(
+            parser = TaskDslParser(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedRunnerTimeSource(),
+            runIdFactory = { "persisted-manual-run" },
+        )
+
+        val result = service.run(
+            TaskDefinitionRecord(
+                taskId = "smoke-login",
+                name = "Smoke Login",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = validTaskJson,
+                updatedAt = 200L,
+            ),
+        )
+
+        assertEquals(1, recorder.recordCount)
+        assertEquals(result.taskRun.runId, recorder.lastResult?.taskRun?.runId)
     }
 
     private class RecordingTaskRunner : TaskRunner {
@@ -123,6 +158,21 @@ class ManualTaskExecutionServiceTest {
         override fun nowMs(): Long = 1_000L
 
         override suspend fun delay(durationMs: Long) = Unit
+    }
+
+    private class RecordingTaskExecutionRecorder : TaskExecutionRecorder {
+        var recordCount: Int = 0
+        var lastResult: TaskExecutionResult? = null
+
+        override suspend fun record(
+            result: TaskExecutionResult,
+            sessionId: String?,
+            cycleNo: Int?,
+        ): TaskExecutionResult {
+            recordCount += 1
+            lastResult = result
+            return result
+        }
     }
 
     private companion object {

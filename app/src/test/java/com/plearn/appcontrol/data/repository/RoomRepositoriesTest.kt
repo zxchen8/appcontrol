@@ -7,8 +7,10 @@ import com.plearn.appcontrol.data.local.AppControlDatabase
 import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.CredentialSetItemRecord
 import com.plearn.appcontrol.data.model.CredentialSetRecord
+import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
+import com.plearn.appcontrol.data.model.TaskRunRecord
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -25,6 +27,7 @@ class RoomRepositoriesTest {
     private lateinit var database: AppControlDatabase
     private lateinit var taskRepository: TaskRepository
     private lateinit var credentialRepository: CredentialRepository
+    private lateinit var runRecordRepository: RunRecordRepository
 
     @Before
     fun setUp() {
@@ -34,6 +37,7 @@ class RoomRepositoriesTest {
             .build()
         taskRepository = RoomTaskRepository(database.taskDefinitionDao(), database.taskScheduleStateDao())
         credentialRepository = RoomCredentialRepository(database.credentialProfileDao(), database.credentialSetDao())
+        runRecordRepository = RoomRunRecordRepository(database.taskRunDao(), database.stepRunDao())
     }
 
     @After
@@ -115,5 +119,73 @@ class RoomRepositoriesTest {
 
         assertNotNull(credentialSet)
         assertEquals(listOf("profile-a", "profile-b"), credentialSet?.items?.map { it.profileId })
+    }
+
+    @Test
+    fun runRecordRepositoryShouldPersistTaskRunAndStepRuns() = runBlocking {
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        runRecordRepository.upsertTaskRun(
+            TaskRunRecord(
+                runId = "run-a",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 200,
+                finishedAt = 260,
+                durationMs = 60,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+        )
+        runRecordRepository.insertStepRuns(
+            listOf(
+                StepRunRecord(
+                    runId = "run-a",
+                    stepId = "step-1",
+                    status = "success",
+                    startedAt = 210,
+                    finishedAt = 220,
+                    durationMs = 10,
+                    errorCode = null,
+                    message = null,
+                    artifactsJson = "{}",
+                ),
+                StepRunRecord(
+                    runId = "run-a",
+                    stepId = "step-2",
+                    status = "failed",
+                    startedAt = 221,
+                    finishedAt = 240,
+                    durationMs = 19,
+                    errorCode = "STEP_EXECUTION_FAILED",
+                    message = "tap failed",
+                    artifactsJson = "{}",
+                ),
+            ),
+        )
+
+        val latestTaskRun = runRecordRepository.findLatestTaskRun("task-run-a")
+        val storedStepRuns = runRecordRepository.findStepRuns("run-a")
+
+        assertNotNull(latestTaskRun)
+        assertEquals("success", latestTaskRun?.status)
+        assertEquals(listOf("step-1", "step-2"), storedStepRuns.map { it.stepId })
+        assertEquals(listOf("success", "failed"), storedStepRuns.map { it.status })
     }
 }
