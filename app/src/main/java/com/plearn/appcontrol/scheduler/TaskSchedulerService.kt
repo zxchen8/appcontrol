@@ -1,6 +1,7 @@
 package com.plearn.appcontrol.scheduler
 
 import com.plearn.appcontrol.data.model.ContinuousSessionRecord
+import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
 import com.plearn.appcontrol.data.repository.CredentialRepository
@@ -13,6 +14,7 @@ import com.plearn.appcontrol.dsl.TaskDslParser
 import com.plearn.appcontrol.dsl.TaskTrigger
 import com.plearn.appcontrol.runner.RunTriggerType
 import com.plearn.appcontrol.runner.TaskExecutionRecorder
+import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
 import kotlinx.serialization.json.JsonObject
@@ -191,7 +193,8 @@ class TaskSchedulerService(
             )
             return
         }
-        if (credentialRepository.getCredentialSet(credentialSetId) == null) {
+        val credentialSet = credentialRepository.getCredentialSet(credentialSetId)
+        if (credentialSet == null) {
             blockContinuousTask(
                 executableTask = executableTask,
                 runningSession = runningSession,
@@ -200,6 +203,23 @@ class TaskSchedulerService(
             )
             return
         }
+
+        val credentialAliasByProfileId = credentialRepository.getEnabledProfiles()
+            .associateBy(CredentialProfileRecord::profileId, CredentialProfileRecord::alias)
+        val rotation = resolveCredentialRotation(
+            credentialSet = credentialSet,
+            aliasByProfileId = credentialAliasByProfileId,
+            cursorIndex = runningSession?.cursorIndex ?: 0,
+        ) ?: run {
+            blockContinuousTask(
+                executableTask = executableTask,
+                runningSession = runningSession,
+                nowMs = nowMs,
+                errorCode = SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE,
+            )
+            return
+        }
+        val stopSessionOnFailure = executableTask.task.accountRotation.onCycleFailureStopSession()
 
         val activeSession = runningSession
             ?: ContinuousSessionRecord(
@@ -216,13 +236,21 @@ class TaskSchedulerService(
                 currentCredentialAlias = null,
                 nextCredentialProfileId = null,
                 nextCredentialAlias = null,
-                cursorIndex = 0,
+                cursorIndex = rotation.currentIndex,
                 lastErrorCode = null,
             )
 
+        if (runningSession == null) {
+            sessionRepository.upsertSession(activeSession)
+        }
+
         val cycleNo = activeSession.totalCycles + 1
         val execution = executionRecorder.record(
-            result = taskRunner.run(executableTask.task, RunTriggerType.CONTINUOUS),
+            result = taskRunner.run(executableTask.task, RunTriggerType.CONTINUOUS).withCredentialContext(
+                credentialSetId = credentialSetId,
+                credentialProfileId = rotation.current.profileId,
+                credentialAlias = rotation.current.alias,
+            ),
             sessionId = activeSession.sessionId,
             cycleNo = cycleNo,
         )
@@ -232,10 +260,12 @@ class TaskSchedulerService(
         val totalCycles = activeSession.totalCycles + 1
         val reachedMaxCycles = trigger.maxCycles != null && totalCycles >= trigger.maxCycles
         val reachedMaxDuration = trigger.maxDurationMs != null && nowMs - activeSession.startedAt >= trigger.maxDurationMs
+        val shouldStopOnFailure = execution.taskRun.status == TaskRunStatus.FAILED && stopSessionOnFailure
 
-        if (reachedMaxCycles || reachedMaxDuration || execution.taskRun.status == TaskRunStatus.BLOCKED) {
+        if (reachedMaxCycles || reachedMaxDuration || execution.taskRun.status == TaskRunStatus.BLOCKED || shouldStopOnFailure) {
             val terminalStatus = when {
                 execution.taskRun.status == TaskRunStatus.BLOCKED -> TaskRunStatus.BLOCKED
+                shouldStopOnFailure -> TaskRunStatus.FAILED
                 reachedMaxDuration -> TaskRunStatus.TIMED_OUT
                 else -> TaskRunStatus.SUCCESS
             }
@@ -265,6 +295,11 @@ class TaskSchedulerService(
                 totalCycles = totalCycles,
                 successCycles = successCycles,
                 failedCycles = failedCycles,
+                currentCredentialProfileId = rotation.current.profileId,
+                currentCredentialAlias = rotation.current.alias,
+                nextCredentialProfileId = rotation.next.profileId,
+                nextCredentialAlias = rotation.next.alias,
+                cursorIndex = rotation.nextIndex,
                 lastErrorCode = execution.taskRun.errorCode,
             ),
         )
@@ -327,8 +362,69 @@ class TaskSchedulerService(
     private fun JsonObject?.stringValue(key: String): String? =
         (this?.get(key) as? JsonPrimitive)?.contentOrNull
 
+    private fun JsonObject?.onCycleFailureStopSession(): Boolean =
+        stringValue("onCycleFailure") == "stop_session"
+
+    private fun resolveCredentialRotation(
+        credentialSet: com.plearn.appcontrol.data.model.CredentialSetRecord,
+        aliasByProfileId: Map<String, String>,
+        cursorIndex: Int,
+    ): CredentialRotation? {
+        val enabledCredentials = credentialSet.items
+            .asSequence()
+            .filter { it.enabled }
+            .sortedBy { it.orderNo }
+            .mapNotNull { item ->
+                aliasByProfileId[item.profileId]?.let { alias ->
+                    SelectedCredential(
+                        profileId = item.profileId,
+                        alias = alias,
+                    )
+                }
+            }
+            .toList()
+        if (enabledCredentials.isEmpty()) {
+            return null
+        }
+
+        val normalizedCurrentIndex = cursorIndex.mod(enabledCredentials.size)
+        val current = enabledCredentials[normalizedCurrentIndex]
+        val nextIndex = (normalizedCurrentIndex + 1) % enabledCredentials.size
+        val next = enabledCredentials[nextIndex]
+        return CredentialRotation(
+            currentIndex = normalizedCurrentIndex,
+            current = current,
+            nextIndex = nextIndex,
+            next = next,
+        )
+    }
+
+    private fun TaskExecutionResult.withCredentialContext(
+        credentialSetId: String,
+        credentialProfileId: String,
+        credentialAlias: String,
+    ): TaskExecutionResult = copy(
+        taskRun = taskRun.copy(
+            credentialSetId = credentialSetId,
+            credentialProfileId = credentialProfileId,
+            credentialAlias = credentialAlias,
+        ),
+    )
+
     private data class ParsedTask(
         val task: TaskDefinition,
+    )
+
+    private data class SelectedCredential(
+        val profileId: String,
+        val alias: String,
+    )
+
+    private data class CredentialRotation(
+        val currentIndex: Int,
+        val current: SelectedCredential,
+        val nextIndex: Int,
+        val next: SelectedCredential,
     )
 
     private data class ExecutableTask(
