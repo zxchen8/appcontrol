@@ -74,6 +74,150 @@ class TaskSchedulerServiceTest {
     }
 
     @Test
+    fun shouldSkipMissedCronDuringRecoveryAndAdvanceNextTrigger() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 61_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        val result = scheduler.dispatchDueTasks(mode = SchedulerDispatchMode.RECOVERY)
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertTrue(runner.invocations.isEmpty())
+        assertEquals(0, recorder.recordCount)
+        assertEquals(ScheduleStatus.MISSED_SKIPPED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
+        assertTrue(taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt!! > 61_000L)
+    }
+
+    @Test
+    fun shouldSkipCronWhenExecutionLockIsOccupiedAndConflictPolicyIsSkip() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            executionLock = FakeTaskExecutionLock(lockedPackages = mutableSetOf("com.example.target")),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertTrue(runner.invocations.isEmpty())
+        assertEquals(0, recorder.recordCount)
+        assertEquals(ScheduleStatus.CONFLICT_SKIPPED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
+        assertTrue(taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt!! > 1_000L)
+    }
+
+    @Test
+    fun shouldDelayCronWhenExecutionLockIsOccupiedAndConflictPolicyIsRunAfterCurrent() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task-delayed",
+                    name = "Cron Task Delayed",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJsonRunAfterCurrent,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task-delayed" to TaskScheduleStateRecord(
+                    taskId = "cron-task-delayed",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            executionLock = FakeTaskExecutionLock(lockedPackages = mutableSetOf("com.example.target")),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertTrue(runner.invocations.isEmpty())
+        assertEquals(0, recorder.recordCount)
+        assertEquals(ScheduleStatus.CONFLICT_DELAYED, taskRepository.scheduleStates.getValue("cron-task-delayed").lastScheduleStatus)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task-delayed").nextTriggerAt)
+    }
+
+    @Test
     fun shouldExecuteContinuousCyclePersistRunAndKeepSessionRunning() = runBlocking {
         val taskRepository = FakeTaskRepository(
             definitions = mutableListOf(
@@ -288,6 +432,84 @@ class TaskSchedulerServiceTest {
         assertEquals(null, taskRepository.scheduleStates.getValue("continuous-task").nextTriggerAt)
     }
 
+    @Test
+    fun shouldRunOnlyOneContinuousTaskPerPackagePerDispatch() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task-a",
+                    name = "Continuous Task A",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJsonA,
+                    updatedAt = 1L,
+                ),
+                TaskDefinitionRecord(
+                    taskId = "continuous-task-b",
+                    name = "Continuous Task B",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJsonB,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task-a" to TaskScheduleStateRecord(
+                    taskId = "continuous-task-a",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+                "continuous-task-b" to TaskScheduleStateRecord(
+                    taskId = "continuous-task-b",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = CredentialSetRecord(
+                credentialSetId = "smoke-set-a",
+                name = "Smoke Set",
+                description = null,
+                strategy = "round_robin",
+                enabled = true,
+                createdAt = 1L,
+                updatedAt = 1L,
+                items = listOf(CredentialSetItemRecord("smoke-set-a", "profile-a", 0, true)),
+            ),
+        )
+        val sessionRepository = FakeSessionRepository()
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-generated" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertEquals(listOf("continuous-task-a"), result.executedTaskIds)
+        assertEquals(1, runner.invocations.size)
+        assertEquals("continuous-task-a", runner.invocations.single().taskId)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(6_000L, taskRepository.scheduleStates.getValue("continuous-task-a").nextTriggerAt)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("continuous-task-b").nextTriggerAt)
+        assertEquals(null, taskRepository.scheduleStates.getValue("continuous-task-b").lastTriggerAt)
+    }
+
     private class RecordingTaskRunner(
         private val status: String,
     ) : TaskRunner {
@@ -351,6 +573,16 @@ class TaskSchedulerServiceTest {
                     cycleNo = cycleNo,
                 ),
             )
+        }
+    }
+
+    private class FakeTaskExecutionLock(
+        private val lockedPackages: MutableSet<String> = mutableSetOf(),
+    ) : TaskExecutionLock {
+        override suspend fun tryAcquire(packageName: String): Boolean = lockedPackages.add(packageName)
+
+        override suspend fun release(packageName: String) {
+            lockedPackages.remove(packageName)
         }
     }
 
@@ -442,7 +674,7 @@ class TaskSchedulerServiceTest {
     }
 
     private companion object {
-        val cronTaskJson = """
+                val cronTaskJson = """
             {
               "schemaVersion": "1.0",
               "taskId": "cron-task",
@@ -476,7 +708,41 @@ class TaskSchedulerServiceTest {
             }
         """.trimIndent()
 
-        val continuousTaskJson = """
+                val cronTaskJsonRunAfterCurrent = """
+                        {
+                            "schemaVersion": "1.0",
+                            "taskId": "cron-task-delayed",
+                            "name": "Cron Task Delayed",
+                            "enabled": true,
+                            "targetApp": {
+                                "packageName": "com.example.target"
+                            },
+                            "trigger": {
+                                "type": "cron",
+                                "expression": "*/30 * * * *",
+                                "timezone": "Asia/Shanghai"
+                            },
+                            "executionPolicy": {
+                                "taskTimeoutMs": 300000,
+                                "maxRetries": 0,
+                                "retryBackoffMs": 1000,
+                                "conflictPolicy": "run_after_current",
+                                "onMissedSchedule": "skip"
+                            },
+                            "steps": [
+                                {
+                                    "id": "step-start",
+                                    "type": "start_app",
+                                    "timeoutMs": 15000,
+                                    "params": {
+                                        "packageName": "com.example.target"
+                                    }
+                                }
+                            ]
+                        }
+                """.trimIndent()
+
+                val continuousTaskJson = """
             {
               "schemaVersion": "1.0",
               "taskId": "continuous-task",
@@ -516,5 +782,13 @@ class TaskSchedulerServiceTest {
               ]
             }
         """.trimIndent()
+
+        val continuousTaskJsonA = continuousTaskJson
+            .replace("\"continuous-task\"", "\"continuous-task-a\"")
+            .replace("\"Continuous Task\"", "\"Continuous Task A\"")
+
+        val continuousTaskJsonB = continuousTaskJson
+            .replace("\"continuous-task\"", "\"continuous-task-b\"")
+            .replace("\"Continuous Task\"", "\"Continuous Task B\"")
     }
 }

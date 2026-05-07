@@ -6,6 +6,8 @@ import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
 import com.plearn.appcontrol.data.repository.CredentialRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
 import com.plearn.appcontrol.data.repository.TaskRepository
+import com.plearn.appcontrol.dsl.ConflictPolicy
+import com.plearn.appcontrol.dsl.MissedSchedulePolicy
 import com.plearn.appcontrol.dsl.TaskDefinition
 import com.plearn.appcontrol.dsl.TaskDslParser
 import com.plearn.appcontrol.dsl.TaskTrigger
@@ -26,9 +28,10 @@ class TaskSchedulerService(
     private val executionRecorder: TaskExecutionRecorder,
     private val timeSource: SchedulerTimeSource = SystemSchedulerTimeSource,
     private val cronScheduleCalculator: CronScheduleCalculator = CronScheduleCalculator(),
+    private val executionLock: TaskExecutionLock = InMemoryTaskExecutionLock(),
     private val sessionIdFactory: () -> String,
 ) {
-    suspend fun dispatchDueTasks(): SchedulerDispatchResult {
+    suspend fun dispatchDueTasks(mode: SchedulerDispatchMode = SchedulerDispatchMode.NORMAL): SchedulerDispatchResult {
         val nowMs = timeSource.nowMs()
         val executableTasks = mutableListOf<ExecutableTask>()
 
@@ -54,15 +57,111 @@ class TaskSchedulerService(
         }
 
         val executedTaskIds = mutableListOf<String>()
+        val continuousPackagesExecuted = mutableSetOf<String>()
         for (executableTask in executableTasks.sortedWith(compareBy<ExecutableTask>({ if (it.task.trigger is TaskTrigger.Cron) 0 else 1 }, { it.scheduleState.nextTriggerAt ?: Long.MAX_VALUE }, { it.definitionRecord.taskId }))) {
+            if (mode == SchedulerDispatchMode.RECOVERY && shouldSkipMissedSchedule(executableTask, nowMs)) {
+                skipMissedTask(executableTask, nowMs)
+                continue
+            }
+
+            if (executableTask.task.trigger is TaskTrigger.Continuous && !shouldDispatchContinuousTask(executableTask, continuousPackagesExecuted)) {
+                continue
+            }
+
+            if (executeWithLock(executableTask, nowMs)) {
+                executedTaskIds += executableTask.definitionRecord.taskId
+                if (executableTask.task.trigger is TaskTrigger.Continuous) {
+                    continuousPackagesExecuted += executableTask.task.targetApp.packageName
+                }
+            }
+        }
+
+        return SchedulerDispatchResult(executedTaskIds = executedTaskIds)
+    }
+
+    private fun shouldDispatchContinuousTask(
+        executableTask: ExecutableTask,
+        continuousPackagesExecuted: Set<String>,
+    ): Boolean = executableTask.task.targetApp.packageName !in continuousPackagesExecuted
+
+    private fun shouldSkipMissedSchedule(executableTask: ExecutableTask, nowMs: Long): Boolean {
+        if (executableTask.task.trigger !is TaskTrigger.Cron) {
+            return false
+        }
+        val scheduledAt = executableTask.scheduleState.nextTriggerAt ?: return false
+        return scheduledAt < nowMs && executableTask.task.executionPolicy.onMissedSchedule == MissedSchedulePolicy.SKIP
+    }
+
+    private suspend fun skipMissedTask(executableTask: ExecutableTask, nowMs: Long) {
+        val trigger = executableTask.task.trigger as? TaskTrigger.Cron ?: return
+        val scheduledAt = executableTask.scheduleState.nextTriggerAt ?: nowMs
+        taskRepository.upsertScheduleState(
+            executableTask.scheduleState.copy(
+                nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
+                standbyEnabled = executableTask.definitionRecord.enabled,
+                lastTriggerAt = scheduledAt,
+                lastScheduleStatus = ScheduleStatus.MISSED_SKIPPED,
+            ),
+        )
+    }
+
+    private suspend fun executeWithLock(executableTask: ExecutableTask, nowMs: Long): Boolean {
+        val packageName = executableTask.task.targetApp.packageName
+        if (!executionLock.tryAcquire(packageName)) {
+            handleExecutionLockConflict(executableTask, nowMs)
+            return false
+        }
+
+        return try {
             when (executableTask.task.trigger) {
                 is TaskTrigger.Cron -> executeCronTask(executableTask, nowMs)
                 is TaskTrigger.Continuous -> executeContinuousTask(executableTask, nowMs)
             }
-            executedTaskIds += executableTask.definitionRecord.taskId
+            true
+        } finally {
+            executionLock.release(packageName)
         }
+    }
 
-        return SchedulerDispatchResult(executedTaskIds = executedTaskIds)
+    private suspend fun handleExecutionLockConflict(executableTask: ExecutableTask, nowMs: Long) {
+        when (val trigger = executableTask.task.trigger) {
+            is TaskTrigger.Cron -> {
+                val scheduledAt = executableTask.scheduleState.nextTriggerAt ?: nowMs
+                when (executableTask.task.executionPolicy.conflictPolicy) {
+                    ConflictPolicy.SKIP -> {
+                        taskRepository.upsertScheduleState(
+                            executableTask.scheduleState.copy(
+                                nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
+                                standbyEnabled = executableTask.definitionRecord.enabled,
+                                lastTriggerAt = scheduledAt,
+                                lastScheduleStatus = ScheduleStatus.CONFLICT_SKIPPED,
+                            ),
+                        )
+                    }
+
+                    ConflictPolicy.RUN_AFTER_CURRENT -> {
+                        taskRepository.upsertScheduleState(
+                            executableTask.scheduleState.copy(
+                                nextTriggerAt = nowMs,
+                                standbyEnabled = executableTask.definitionRecord.enabled,
+                                lastTriggerAt = scheduledAt,
+                                lastScheduleStatus = ScheduleStatus.CONFLICT_DELAYED,
+                            ),
+                        )
+                    }
+                }
+            }
+
+            is TaskTrigger.Continuous -> {
+                taskRepository.upsertScheduleState(
+                    executableTask.scheduleState.copy(
+                        nextTriggerAt = executableTask.scheduleState.nextTriggerAt ?: nowMs,
+                        standbyEnabled = executableTask.definitionRecord.enabled,
+                        lastScheduleStatus = ScheduleStatus.CONFLICT_DELAYED,
+                    ),
+                )
+            }
+        }
     }
 
     private suspend fun executeCronTask(executableTask: ExecutableTask, nowMs: Long) {
