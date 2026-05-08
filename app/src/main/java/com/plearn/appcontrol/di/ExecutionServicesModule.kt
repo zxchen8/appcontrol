@@ -1,6 +1,7 @@
 package com.plearn.appcontrol.di
 
 import com.plearn.appcontrol.appservice.ManualTaskExecutionService
+import com.plearn.appcontrol.appservice.SchedulerRecoveryOrchestrator
 import com.plearn.appcontrol.data.repository.CredentialRepository
 import com.plearn.appcontrol.data.repository.RunRecordRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
@@ -73,5 +74,13 @@ object ExecutionServicesModule {
         timeSource = schedulerTimeSource,
         cronScheduleCalculator = cronScheduleCalculator,
         sessionIdFactory = { UUID.randomUUID().toString() },
+    )
+
+    @Provides
+    @Singleton
+    fun provideSchedulerRecoveryOrchestrator(
+        taskSchedulerService: TaskSchedulerService,
+    ): SchedulerRecoveryOrchestrator = SchedulerRecoveryOrchestrator(
+        recoverDispatcher = taskSchedulerService::dispatchDueTasks,
     )
 }
