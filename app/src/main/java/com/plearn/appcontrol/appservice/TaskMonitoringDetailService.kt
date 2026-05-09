@@ -27,6 +27,7 @@ data class TaskFailureContextSummary(
     val primaryFailedStepId: String?,
     val primaryFailedStepErrorCode: String?,
     val primaryFailedStepMessage: String?,
+    val runArtifacts: List<String>,
     val stepArtifacts: List<String>,
 )
 
@@ -65,7 +66,7 @@ class TaskMonitoringDetailService @Inject constructor(
             runRecordRepository.findStepRuns(selectedRun.runId)
         }
         val diagnostics = parser.parse(definition.rawJson).task?.diagnostics?.toSummary() ?: DiagnosticsPolicy().toSummary()
-        val failureContext = buildFailureContext(selectedRun, stepRuns)
+        val failureContext = buildFailureContext(selectedRun, stepRuns, diagnostics)
 
         return TaskMonitoringDetailSnapshot(
             definition = definition,
@@ -118,6 +119,7 @@ class TaskMonitoringDetailService @Inject constructor(
     private fun buildFailureContext(
         selectedRun: RecentRunSummary?,
         stepRuns: List<StepRunRecord>,
+        diagnostics: TaskDiagnosticsSummary,
     ): TaskFailureContextSummary? {
         if (selectedRun == null) {
             return null
@@ -141,6 +143,15 @@ class TaskMonitoringDetailService @Inject constructor(
         val primaryFailedStep = failedSteps.firstOrNull { step ->
             step.errorCode != null || !step.message.isNullOrBlank()
         } ?: failedSteps.firstOrNull()
+        val stepArtifacts = failedSteps.mapNotNull { step ->
+            step.artifactsJson.toArtifactSummary(step.stepId)
+        }.distinct()
+        val runArtifacts = buildRunArtifacts(
+            selectedRun = selectedRun,
+            stepRuns = stepRuns,
+            diagnostics = diagnostics,
+            hasFailedSteps = failedSteps.isNotEmpty(),
+        )
 
         return TaskFailureContextSummary(
             runId = selectedRun.runId,
@@ -151,10 +162,34 @@ class TaskMonitoringDetailService @Inject constructor(
             primaryFailedStepId = primaryFailedStep?.stepId,
             primaryFailedStepErrorCode = primaryFailedStep?.errorCode,
             primaryFailedStepMessage = primaryFailedStep?.message,
-            stepArtifacts = failedSteps.mapNotNull { step ->
-                step.artifactsJson.toArtifactSummary(step.stepId)
-            }.distinct(),
+            runArtifacts = runArtifacts,
+            stepArtifacts = stepArtifacts,
         )
+    }
+
+    private fun buildRunArtifacts(
+        selectedRun: RecentRunSummary,
+        stepRuns: List<StepRunRecord>,
+        diagnostics: TaskDiagnosticsSummary,
+        hasFailedSteps: Boolean,
+    ): List<String> {
+        if (hasFailedSteps) {
+            return emptyList()
+        }
+
+        if (selectedRun.status.equals("blocked", ignoreCase = true) && stepRuns.isEmpty()) {
+            return listOf("run=截图未采集 | 原因=阻断发生在首个动作步骤前")
+        }
+
+        if (stepRuns.isNotEmpty()) {
+            return emptyList()
+        }
+
+        return if (diagnostics.captureScreenshotOnFailure) {
+            listOf("run=截图不可用 | 原因=当前版本未实现失败截图采集")
+        } else {
+            listOf("run=截图已跳过 | 原因=诊断策略已关闭失败截图采集")
+        }
     }
 
     private fun String.toArtifactSummary(stepId: String): String? {

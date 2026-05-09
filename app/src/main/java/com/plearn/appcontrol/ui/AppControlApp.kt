@@ -1156,9 +1156,15 @@ private fun TaskMonitoringDetailCard(
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
+                        snapshot.failureContext.runArtifacts.forEach { artifact ->
+                            Text(
+                                text = artifact,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         snapshot.failureContext.stepArtifacts.forEach { artifact ->
                             Text(
-                                text = "artifact=$artifact",
+                                text = artifact,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }

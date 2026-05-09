@@ -71,6 +71,7 @@ class TaskMonitoringDetailServiceTest {
         assertEquals("run newer failed", snapshot?.failureContext?.runMessage)
         assertEquals(1, snapshot?.failureContext?.failedStepCount)
         assertEquals("step-2", snapshot?.failureContext?.primaryFailedStepId)
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.runArtifacts)
         assertEquals(
             listOf("step-2=截图已抑制 | 原因=sensitive"),
             snapshot?.failureContext?.stepArtifacts,
@@ -103,6 +104,7 @@ class TaskMonitoringDetailServiceTest {
             ),
             snapshot?.failureContext?.stepArtifacts,
         )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.runArtifacts)
     }
 
     @Test
@@ -131,6 +133,7 @@ class TaskMonitoringDetailServiceTest {
             ),
             snapshot?.failureContext?.stepArtifacts,
         )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.runArtifacts)
     }
 
     @Test
@@ -156,6 +159,119 @@ class TaskMonitoringDetailServiceTest {
         assertEquals(
             listOf(
                 "step-2=截图不可用 | 原因=当前版本未实现截图采集 (DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED) | 请求截图=true | 敏感上下文=false | raw={\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"captureRequested\":true,\"sensitiveContextActive\":false,\"collector\":\"runner-v2\"}",
+            ),
+            snapshot?.failureContext?.stepArtifacts,
+        )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.runArtifacts)
+    }
+
+    @Test
+    fun shouldDeriveRunLevelPolicyDisabledArtifactWhenRunFailsBeforeAnyStep() = runBlocking {
+        val runLevelFailure = newerRun.copy(
+            runId = "run-level-failure",
+            errorCode = "RUNNER_PREPARE_FAILED",
+            message = "failed before any step started",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(runLevelFailure)),
+                stepRunsByRunId = mapOf("run-level-failure" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-level-failure", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图已跳过 | 原因=诊断策略已关闭失败截图采集"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.stepArtifacts)
+    }
+
+    @Test
+    fun shouldDeriveRunLevelUnavailableArtifactWhenRunFailsBeforeAnyStepAndCaptureEnabled() = runBlocking {
+        val runLevelFailure = newerRun.copy(
+            runId = "run-level-unavailable",
+            errorCode = "RUNNER_PREPARE_FAILED",
+            message = "failed before any step started",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(runLevelFailure)),
+                stepRunsByRunId = mapOf("run-level-unavailable" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-level-unavailable", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图不可用 | 原因=当前版本未实现失败截图采集"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.stepArtifacts)
+    }
+
+    @Test
+    fun shouldDescribePreActionBlockedRunWithoutStepRecords() = runBlocking {
+        val blockedRun = newerRun.copy(
+            runId = "run-blocked",
+            status = "blocked",
+            errorCode = "SCHEDULER_PRECHECK_BLOCKED",
+            message = "precheck blocked before first action",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(blockedRun)),
+                stepRunsByRunId = mapOf("run-blocked" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-blocked", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图未采集 | 原因=阻断发生在首个动作步骤前"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.stepArtifacts)
+        assertEquals(0, snapshot?.failureContext?.failedStepCount)
+    }
+
+    @Test
+    fun shouldNotTreatBlockedRunWithRecordedStepsAsPreActionBlock() = runBlocking {
+        val blockedRun = newerRun.copy(
+            runId = "run-blocked-with-steps",
+            status = "blocked",
+            errorCode = "RUNNER_BLOCKED",
+            message = "blocked after entering flow",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(blockedRun)),
+                stepRunsByRunId = mapOf(
+                    "run-blocked-with-steps" to listOf(
+                        stepRun1,
+                        stepRun2.copy(
+                            artifactsJson = "{\"artifactType\":\"screenshot_skipped\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY\",\"captureRequested\":false,\"sensitiveContextActive\":false}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-blocked-with-steps", recentRunLimit = 5)
+
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.runArtifacts)
+        assertEquals(
+            listOf(
+                "step-2=截图已跳过 | 原因=诊断策略已关闭截图采集 (DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY) | 请求截图=false | 敏感上下文=false",
             ),
             snapshot?.failureContext?.stepArtifacts,
         )
