@@ -1,7 +1,9 @@
 package com.plearn.appcontrol.di
 
 import com.plearn.appcontrol.appservice.AlarmManagerSchedulerRecoveryAlarmScheduler
+import com.plearn.appcontrol.appservice.ForegroundSchedulerStandbyController
 import com.plearn.appcontrol.appservice.ManualTaskExecutionService
+import com.plearn.appcontrol.appservice.SchedulerStandbyController
 import com.plearn.appcontrol.appservice.SchedulerRecoveryAlarmScheduler
 import com.plearn.appcontrol.appservice.SchedulerRecoveryOrchestrator
 import com.plearn.appcontrol.data.repository.CredentialRepository
@@ -37,6 +39,12 @@ object ExecutionServicesModule {
     fun provideSchedulerRecoveryAlarmScheduler(
         impl: AlarmManagerSchedulerRecoveryAlarmScheduler,
     ): SchedulerRecoveryAlarmScheduler = impl
+
+    @Provides
+    @Singleton
+    fun provideSchedulerStandbyController(
+        impl: ForegroundSchedulerStandbyController,
+    ): SchedulerStandbyController = impl
 
     @Provides
     @Singleton

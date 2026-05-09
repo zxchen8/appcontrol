@@ -17,6 +17,7 @@ import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -70,7 +71,7 @@ class TaskSchedulerService(
                 continue
             }
 
-            if (executeWithLock(executableTask, nowMs)) {
+            if (executeWithLock(executableTask, nowMs, mode)) {
                 executedTaskIds += executableTask.definitionRecord.taskId
                 if (executableTask.task.trigger is TaskTrigger.Continuous) {
                     continuousPackagesExecuted += executableTask.task.targetApp.packageName
@@ -107,7 +108,11 @@ class TaskSchedulerService(
         )
     }
 
-    private suspend fun executeWithLock(executableTask: ExecutableTask, nowMs: Long): Boolean {
+    private suspend fun executeWithLock(
+        executableTask: ExecutableTask,
+        nowMs: Long,
+        mode: SchedulerDispatchMode,
+    ): Boolean {
         val packageName = executableTask.task.targetApp.packageName
         if (!executionLock.tryAcquire(packageName)) {
             handleExecutionLockConflict(executableTask, nowMs)
@@ -117,9 +122,8 @@ class TaskSchedulerService(
         return try {
             when (executableTask.task.trigger) {
                 is TaskTrigger.Cron -> executeCronTask(executableTask, nowMs)
-                is TaskTrigger.Continuous -> executeContinuousTask(executableTask, nowMs)
+                is TaskTrigger.Continuous -> executeContinuousTask(executableTask, nowMs, mode)
             }
-            true
         } finally {
             executionLock.release(packageName)
         }
@@ -166,63 +170,71 @@ class TaskSchedulerService(
         }
     }
 
-    private suspend fun executeCronTask(executableTask: ExecutableTask, nowMs: Long) {
-        val execution = executionRecorder.record(
-            result = taskRunner.run(executableTask.task, RunTriggerType.CRON),
-        )
+    private suspend fun executeCronTask(executableTask: ExecutableTask, nowMs: Long): Boolean {
         val trigger = executableTask.task.trigger as TaskTrigger.Cron
-        taskRepository.upsertScheduleState(
-            executableTask.scheduleState.copy(
-                nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
-                standbyEnabled = executableTask.definitionRecord.enabled,
-                lastTriggerAt = nowMs,
-                lastScheduleStatus = if (execution.taskRun.status == TaskRunStatus.BLOCKED) ScheduleStatus.BLOCKED else ScheduleStatus.SCHEDULED,
-            ),
-        )
+        return try {
+            val execution = executionRecorder.record(
+                result = taskRunner.run(executableTask.task, RunTriggerType.CRON),
+            )
+            taskRepository.upsertScheduleState(
+                executableTask.scheduleState.copy(
+                    nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
+                    standbyEnabled = executableTask.definitionRecord.enabled,
+                    lastTriggerAt = nowMs,
+                    lastScheduleStatus = if (execution.taskRun.status == TaskRunStatus.BLOCKED) ScheduleStatus.BLOCKED else ScheduleStatus.SCHEDULED,
+                ),
+            )
+            true
+        } catch (error: Exception) {
+            if (error is CancellationException) {
+                throw error
+            }
+            taskRepository.upsertScheduleState(
+                executableTask.scheduleState.copy(
+                    nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
+                    standbyEnabled = executableTask.definitionRecord.enabled,
+                    lastTriggerAt = nowMs,
+                    lastScheduleStatus = ScheduleStatus.BLOCKED,
+                ),
+            )
+            false
+        }
     }
 
-    private suspend fun executeContinuousTask(executableTask: ExecutableTask, nowMs: Long) {
+    private suspend fun executeContinuousTask(
+        executableTask: ExecutableTask,
+        nowMs: Long,
+        mode: SchedulerDispatchMode,
+    ): Boolean {
         val trigger = executableTask.task.trigger as TaskTrigger.Continuous
         val runningSession = sessionRepository.findRunningSession(executableTask.definitionRecord.taskId)
         val credentialSetId = executableTask.task.accountRotation.stringValue("credentialSetId") ?: run {
             blockContinuousTask(
                 executableTask = executableTask,
                 runningSession = runningSession,
+                credentialSetId = null,
                 nowMs = nowMs,
                 errorCode = SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE,
             )
-            return
+            return false
         }
         val credentialSet = credentialRepository.getCredentialSet(credentialSetId)
-        if (credentialSet == null) {
+        if (credentialSet == null || !credentialSet.enabled) {
             blockContinuousTask(
                 executableTask = executableTask,
                 runningSession = runningSession,
+                credentialSetId = credentialSetId,
                 nowMs = nowMs,
                 errorCode = SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE,
             )
-            return
+            return false
         }
 
-        val credentialAliasByProfileId = credentialRepository.getEnabledProfiles()
-            .associateBy(CredentialProfileRecord::profileId, CredentialProfileRecord::alias)
-        val rotation = resolveCredentialRotation(
-            credentialSet = credentialSet,
-            aliasByProfileId = credentialAliasByProfileId,
-            cursorIndex = runningSession?.cursorIndex ?: 0,
-        ) ?: run {
-            blockContinuousTask(
-                executableTask = executableTask,
-                runningSession = runningSession,
-                nowMs = nowMs,
-                errorCode = SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE,
-            )
-            return
-        }
-        val stopSessionOnFailure = executableTask.task.accountRotation.onCycleFailureStopSession()
+        val sessionCredentialSetChanged = runningSession?.credentialSetId != null &&
+            runningSession.credentialSetId != credentialSetId
 
-        val activeSession = runningSession
-            ?: ContinuousSessionRecord(
+        val activeSession = when {
+            runningSession == null -> ContinuousSessionRecord(
                 sessionId = sessionIdFactory(),
                 taskId = executableTask.definitionRecord.taskId,
                 credentialSetId = credentialSetId,
@@ -236,100 +248,201 @@ class TaskSchedulerService(
                 currentCredentialAlias = null,
                 nextCredentialProfileId = null,
                 nextCredentialAlias = null,
-                cursorIndex = rotation.currentIndex,
+                cursorIndex = 0,
                 lastErrorCode = null,
             )
 
-        if (runningSession == null) {
-            sessionRepository.upsertSession(activeSession)
+            sessionCredentialSetChanged -> runningSession.copy(
+                credentialSetId = credentialSetId,
+                currentCredentialProfileId = null,
+                currentCredentialAlias = null,
+                nextCredentialProfileId = null,
+                nextCredentialAlias = null,
+                cursorIndex = 0,
+                lastErrorCode = null,
+            )
+
+            else -> runningSession
         }
 
-        val cycleNo = activeSession.totalCycles + 1
-        val execution = executionRecorder.record(
-            result = taskRunner.run(executableTask.task, RunTriggerType.CONTINUOUS).withCredentialContext(
-                credentialSetId = credentialSetId,
-                credentialProfileId = rotation.current.profileId,
-                credentialAlias = rotation.current.alias,
-            ),
-            sessionId = activeSession.sessionId,
-            cycleNo = cycleNo,
-        )
-
-        val successCycles = activeSession.successCycles + if (execution.taskRun.status == TaskRunStatus.SUCCESS) 1 else 0
-        val failedCycles = activeSession.failedCycles + if (execution.taskRun.status == TaskRunStatus.SUCCESS) 0 else 1
-        val totalCycles = activeSession.totalCycles + 1
-        val reachedMaxCycles = trigger.maxCycles != null && totalCycles >= trigger.maxCycles
-        val reachedMaxDuration = trigger.maxDurationMs != null && nowMs - activeSession.startedAt >= trigger.maxDurationMs
-        val shouldStopOnFailure = execution.taskRun.status == TaskRunStatus.FAILED && stopSessionOnFailure
-
-        if (reachedMaxCycles || reachedMaxDuration || execution.taskRun.status == TaskRunStatus.BLOCKED || shouldStopOnFailure) {
-            val terminalStatus = when {
-                execution.taskRun.status == TaskRunStatus.BLOCKED -> TaskRunStatus.BLOCKED
-                shouldStopOnFailure -> TaskRunStatus.FAILED
-                reachedMaxDuration -> TaskRunStatus.TIMED_OUT
-                else -> TaskRunStatus.SUCCESS
+        val persistCursor = executableTask.task.accountRotation.persistCursor()
+        var sessionPersisted = runningSession != null
+        return try {
+            if (trigger.maxDurationMs != null && nowMs - activeSession.startedAt >= trigger.maxDurationMs) {
+                if (!sessionPersisted && runningSession == null) {
+                    sessionRepository.upsertSession(activeSession)
+                    sessionPersisted = true
+                }
+                sessionRepository.updateTerminalState(
+                    sessionId = activeSession.sessionId,
+                    status = TaskRunStatus.TIMED_OUT,
+                    finishedAt = nowMs,
+                    totalCycles = activeSession.totalCycles,
+                    successCycles = activeSession.successCycles,
+                    failedCycles = activeSession.failedCycles,
+                    lastErrorCode = activeSession.lastErrorCode,
+                )
+                taskRepository.upsertScheduleState(
+                    executableTask.scheduleState.copy(
+                        nextTriggerAt = null,
+                        standbyEnabled = false,
+                        lastTriggerAt = nowMs,
+                        lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                    ),
+                )
+                return false
             }
-            sessionRepository.updateTerminalState(
+
+            val credentialAliasByProfileId = credentialRepository.getEnabledProfiles()
+                .associateBy(CredentialProfileRecord::profileId, CredentialProfileRecord::alias)
+            val resumedCursorIndex = if (!persistCursor && mode == SchedulerDispatchMode.RECOVERY) {
+                0
+            } else {
+                activeSession.cursorIndex
+            }
+            val rotation = resolveCredentialRotation(
+                credentialSet = credentialSet,
+                aliasByProfileId = credentialAliasByProfileId,
+                cursorIndex = resumedCursorIndex,
+                resumeProfileId = if (!persistCursor && mode == SchedulerDispatchMode.RECOVERY) {
+                    null
+                } else {
+                    activeSession.nextCredentialProfileId
+                },
+            ) ?: run {
+                blockContinuousTask(
+                    executableTask = executableTask,
+                    runningSession = activeSession,
+                    credentialSetId = credentialSetId,
+                    nowMs = nowMs,
+                    errorCode = SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE,
+                )
+                return false
+            }
+            val stopSessionOnFailure = executableTask.task.accountRotation.onCycleFailureStopSession()
+
+            if (runningSession == null || sessionCredentialSetChanged) {
+                sessionRepository.upsertSession(activeSession)
+                sessionPersisted = true
+            }
+
+            val cycleNo = activeSession.totalCycles + 1
+            val execution = executionRecorder.record(
+                result = taskRunner.run(executableTask.task, RunTriggerType.CONTINUOUS).withCredentialContext(
+                    credentialSetId = credentialSetId,
+                    credentialProfileId = rotation.current.profileId,
+                    credentialAlias = rotation.current.alias,
+                ),
                 sessionId = activeSession.sessionId,
-                status = terminalStatus,
-                finishedAt = nowMs,
-                totalCycles = totalCycles,
-                successCycles = successCycles,
-                failedCycles = failedCycles,
-                lastErrorCode = execution.taskRun.errorCode,
+                cycleNo = cycleNo,
             )
+
+            val successCycles = activeSession.successCycles + if (execution.taskRun.status == TaskRunStatus.SUCCESS) 1 else 0
+            val failedCycles = activeSession.failedCycles + if (execution.taskRun.status == TaskRunStatus.SUCCESS) 0 else 1
+            val totalCycles = activeSession.totalCycles + 1
+            val reachedMaxCycles = trigger.maxCycles != null && totalCycles >= trigger.maxCycles
+            val reachedMaxDuration = trigger.maxDurationMs != null && nowMs - activeSession.startedAt >= trigger.maxDurationMs
+            val shouldStopOnFailure = execution.taskRun.status == TaskRunStatus.FAILED && stopSessionOnFailure
+
+            if (reachedMaxCycles || reachedMaxDuration || execution.taskRun.status == TaskRunStatus.BLOCKED || shouldStopOnFailure) {
+                val terminalStatus = when {
+                    execution.taskRun.status == TaskRunStatus.BLOCKED -> TaskRunStatus.BLOCKED
+                    shouldStopOnFailure -> TaskRunStatus.FAILED
+                    reachedMaxDuration -> TaskRunStatus.TIMED_OUT
+                    else -> TaskRunStatus.SUCCESS
+                }
+                sessionRepository.updateTerminalState(
+                    sessionId = activeSession.sessionId,
+                    status = terminalStatus,
+                    finishedAt = nowMs,
+                    totalCycles = totalCycles,
+                    successCycles = successCycles,
+                    failedCycles = failedCycles,
+                    lastErrorCode = execution.taskRun.errorCode,
+                )
+                taskRepository.upsertScheduleState(
+                    executableTask.scheduleState.copy(
+                        nextTriggerAt = null,
+                        standbyEnabled = false,
+                        lastTriggerAt = nowMs,
+                        lastScheduleStatus = if (terminalStatus == TaskRunStatus.BLOCKED) ScheduleStatus.BLOCKED else ScheduleStatus.SCHEDULED,
+                    ),
+                )
+                return true
+            }
+
+            sessionRepository.upsertSession(
+                activeSession.copy(
+                    status = "running",
+                    totalCycles = totalCycles,
+                    successCycles = successCycles,
+                    failedCycles = failedCycles,
+                    currentCredentialProfileId = rotation.current.profileId,
+                    currentCredentialAlias = rotation.current.alias,
+                    nextCredentialProfileId = rotation.next.profileId,
+                    nextCredentialAlias = rotation.next.alias,
+                    cursorIndex = rotation.nextIndex,
+                    lastErrorCode = execution.taskRun.errorCode,
+                ),
+            )
+            taskRepository.upsertScheduleState(
+                executableTask.scheduleState.copy(
+                    nextTriggerAt = nowMs + trigger.cooldownMs,
+                    standbyEnabled = executableTask.definitionRecord.enabled,
+                    lastTriggerAt = nowMs,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            )
+            true
+        } catch (error: Exception) {
+            if (error is CancellationException) {
+                throw error
+            }
+            if (sessionPersisted) {
+                sessionRepository.updateTerminalState(
+                    sessionId = activeSession.sessionId,
+                    status = TaskRunStatus.BLOCKED,
+                    finishedAt = nowMs,
+                    totalCycles = activeSession.totalCycles,
+                    successCycles = activeSession.successCycles,
+                    failedCycles = activeSession.failedCycles,
+                    lastErrorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
+                )
+            }
             taskRepository.upsertScheduleState(
                 executableTask.scheduleState.copy(
                     nextTriggerAt = null,
                     standbyEnabled = false,
                     lastTriggerAt = nowMs,
-                    lastScheduleStatus = if (terminalStatus == TaskRunStatus.BLOCKED) ScheduleStatus.BLOCKED else ScheduleStatus.SCHEDULED,
+                    lastScheduleStatus = ScheduleStatus.BLOCKED,
                 ),
             )
-            return
+            false
         }
-
-        sessionRepository.upsertSession(
-            activeSession.copy(
-                status = "running",
-                totalCycles = totalCycles,
-                successCycles = successCycles,
-                failedCycles = failedCycles,
-                currentCredentialProfileId = rotation.current.profileId,
-                currentCredentialAlias = rotation.current.alias,
-                nextCredentialProfileId = rotation.next.profileId,
-                nextCredentialAlias = rotation.next.alias,
-                cursorIndex = rotation.nextIndex,
-                lastErrorCode = execution.taskRun.errorCode,
-            ),
-        )
-        taskRepository.upsertScheduleState(
-            executableTask.scheduleState.copy(
-                nextTriggerAt = nowMs + trigger.cooldownMs,
-                standbyEnabled = executableTask.definitionRecord.enabled,
-                lastTriggerAt = nowMs,
-                lastScheduleStatus = ScheduleStatus.SCHEDULED,
-            ),
-        )
     }
 
     private suspend fun blockContinuousTask(
         executableTask: ExecutableTask,
         runningSession: ContinuousSessionRecord?,
+        credentialSetId: String?,
         nowMs: Long,
         errorCode: String,
     ) {
-        if (runningSession != null) {
-            sessionRepository.updateTerminalState(
-                sessionId = runningSession.sessionId,
-                status = TaskRunStatus.BLOCKED,
-                finishedAt = nowMs,
-                totalCycles = runningSession.totalCycles,
-                successCycles = runningSession.successCycles,
-                failedCycles = runningSession.failedCycles,
-                lastErrorCode = errorCode,
-            )
-        }
+        val session = ensureSessionForPreRunFailure(
+            runningSession = runningSession,
+            taskId = executableTask.definitionRecord.taskId,
+            credentialSetId = credentialSetId,
+            nowMs = nowMs,
+        )
+        sessionRepository.updateTerminalState(
+            sessionId = session.sessionId,
+            status = TaskRunStatus.BLOCKED,
+            finishedAt = nowMs,
+            totalCycles = session.totalCycles,
+            successCycles = session.successCycles,
+            failedCycles = session.failedCycles,
+            lastErrorCode = errorCode,
+        )
 
         taskRepository.upsertScheduleState(
             executableTask.scheduleState.copy(
@@ -339,6 +452,36 @@ class TaskSchedulerService(
                 lastScheduleStatus = ScheduleStatus.BLOCKED,
             ),
         )
+    }
+
+    private suspend fun ensureSessionForPreRunFailure(
+        runningSession: ContinuousSessionRecord?,
+        taskId: String,
+        credentialSetId: String?,
+        nowMs: Long,
+    ): ContinuousSessionRecord {
+        if (runningSession != null) {
+            return runningSession
+        }
+        val session = ContinuousSessionRecord(
+            sessionId = sessionIdFactory(),
+            taskId = taskId,
+            credentialSetId = credentialSetId.orEmpty(),
+            status = "running",
+            startedAt = nowMs,
+            finishedAt = null,
+            totalCycles = 0,
+            successCycles = 0,
+            failedCycles = 0,
+            currentCredentialProfileId = null,
+            currentCredentialAlias = null,
+            nextCredentialProfileId = null,
+            nextCredentialAlias = null,
+            cursorIndex = 0,
+            lastErrorCode = null,
+        )
+        sessionRepository.upsertSession(session)
+        return session
     }
 
     private fun parseExecutableTask(definitionRecord: TaskDefinitionRecord): ParsedTask? {
@@ -365,10 +508,14 @@ class TaskSchedulerService(
     private fun JsonObject?.onCycleFailureStopSession(): Boolean =
         stringValue("onCycleFailure") == "stop_session"
 
+    private fun JsonObject?.persistCursor(): Boolean =
+        stringValue("persistCursor")?.equals("false", ignoreCase = true) != true
+
     private fun resolveCredentialRotation(
         credentialSet: com.plearn.appcontrol.data.model.CredentialSetRecord,
         aliasByProfileId: Map<String, String>,
         cursorIndex: Int,
+        resumeProfileId: String?,
     ): CredentialRotation? {
         val enabledCredentials = credentialSet.items
             .asSequence()
@@ -387,7 +534,12 @@ class TaskSchedulerService(
             return null
         }
 
-        val normalizedCurrentIndex = cursorIndex.mod(enabledCredentials.size)
+        val normalizedCurrentIndex = resumeProfileId
+            ?.let { profileId ->
+                enabledCredentials.indexOfFirst { credential -> credential.profileId == profileId }
+                    .takeIf { index -> index >= 0 }
+            }
+            ?: cursorIndex.mod(enabledCredentials.size)
         val current = enabledCredentials[normalizedCurrentIndex]
         val nextIndex = (normalizedCurrentIndex + 1) % enabledCredentials.size
         val next = enabledCredentials[nextIndex]

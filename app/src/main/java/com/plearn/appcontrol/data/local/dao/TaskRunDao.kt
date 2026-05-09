@@ -11,12 +11,15 @@ interface TaskRunDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(taskRun: TaskRunEntity)
 
-    @Query("SELECT * FROM task_runs WHERE taskId = :taskId ORDER BY startedAt DESC LIMIT 1")
+    @Query("SELECT * FROM task_runs WHERE taskId = :taskId ORDER BY startedAt DESC, runId DESC LIMIT 1")
     suspend fun findLatestByTaskId(taskId: String): TaskRunEntity?
 
-    @Query("SELECT * FROM task_runs ORDER BY startedAt DESC LIMIT :limit")
+    @Query("SELECT * FROM task_runs ORDER BY startedAt DESC, runId DESC LIMIT :limit")
     suspend fun listRecent(limit: Int): List<TaskRunEntity>
 
-    @Query("SELECT * FROM task_runs WHERE sessionId = :sessionId ORDER BY cycleNo ASC, startedAt ASC")
+    @Query("SELECT * FROM task_runs WHERE taskId = :taskId ORDER BY startedAt DESC, runId DESC LIMIT :limit")
+    suspend fun listRecentByTaskId(taskId: String, limit: Int): List<TaskRunEntity>
+
+    @Query("SELECT * FROM task_runs WHERE sessionId = :sessionId ORDER BY cycleNo ASC, startedAt ASC, runId ASC")
     suspend fun findBySessionId(sessionId: String): List<TaskRunEntity>
 }

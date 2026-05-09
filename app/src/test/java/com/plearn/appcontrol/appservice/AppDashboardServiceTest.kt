@@ -214,6 +214,9 @@ class AppDashboardServiceTest {
 
         override suspend fun listRecentTaskRuns(limit: Int): List<TaskRunRecord> = recentRuns.take(limit)
 
+        override suspend fun listRecentTaskRunsByTaskId(taskId: String, limit: Int): List<TaskRunRecord> =
+            recentRuns.filter { it.taskId == taskId }.take(limit)
+
         override suspend fun findTaskRunsBySession(sessionId: String): List<TaskRunRecord> =
             recentRuns.filter { it.sessionId == sessionId }
 

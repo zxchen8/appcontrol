@@ -1,5 +1,8 @@
 package com.plearn.appcontrol.dsl
 
+import java.time.DateTimeException
+import java.time.ZoneId
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
@@ -11,6 +14,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.contentOrNull
 
+@OptIn(ExperimentalSerializationApi::class)
 class TaskDslParser(
     private val json: Json = Json {
         ignoreUnknownKeys = true
@@ -136,6 +140,13 @@ class TaskDslParser(
                         path = "trigger.expression",
                         code = DslValidationCode.INVALID_FORMAT,
                         message = "Cron expression must have exactly five parts.",
+                    )
+                }
+                if (timezone != null && !isValidTimezone(timezone)) {
+                    errors += error(
+                        path = "trigger.timezone",
+                        code = DslValidationCode.INVALID_VALUE,
+                        message = "trigger.timezone must be a valid ZoneId.",
                     )
                 }
                 if (expression != null && timezone != null) {
@@ -414,8 +425,6 @@ class TaskDslParser(
                 requireJsonObject(params, "selector", "$pathPrefix.params.selector", errors)
                 requireJsonString(params, "state", "$pathPrefix.params.state", errors)
             }
-
-            else -> Unit
         }
     }
 
@@ -519,6 +528,14 @@ class TaskDslParser(
     }
 
     private fun isFivePartCron(expression: String): Boolean = expression.trim().split(CRON_SPLIT_REGEX).size == 5
+
+    private fun isValidTimezone(timezone: String): Boolean =
+        try {
+            ZoneId.of(timezone)
+            true
+        } catch (_: DateTimeException) {
+            false
+        }
 
     private fun error(path: String, code: DslValidationCode, message: String) = DslValidationError(
         path = path,

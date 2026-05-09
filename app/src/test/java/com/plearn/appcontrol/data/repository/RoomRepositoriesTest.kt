@@ -125,6 +125,53 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun credentialRepositoryShouldListAllProfilesAndSetsIncludingDisabled() = runBlocking {
+        credentialRepository.upsertCredentialProfile(
+            CredentialProfileRecord(
+                profileId = "profile-a",
+                alias = "账号A",
+                tagsJson = "[]",
+                enabled = true,
+                createdAt = 1,
+                updatedAt = 1,
+            ),
+        )
+        credentialRepository.upsertCredentialProfile(
+            CredentialProfileRecord(
+                profileId = "profile-disabled",
+                alias = "账号Disabled",
+                tagsJson = "[]",
+                enabled = false,
+                createdAt = 1,
+                updatedAt = 1,
+            ),
+        )
+
+        credentialRepository.replaceCredentialSet(
+            CredentialSetRecord(
+                credentialSetId = "set-a",
+                name = "Set A",
+                description = null,
+                strategy = "round_robin",
+                enabled = false,
+                createdAt = 1,
+                updatedAt = 1,
+                items = listOf(
+                    CredentialSetItemRecord("set-a", "profile-a", 0, true),
+                    CredentialSetItemRecord("set-a", "profile-disabled", 1, true),
+                ),
+            ),
+        )
+
+        val allProfiles = credentialRepository.listCredentialProfiles()
+        val allSets = credentialRepository.listCredentialSets()
+
+        assertEquals(listOf("profile-a", "profile-disabled"), allProfiles.map { it.profileId })
+        assertEquals(listOf(false), allSets.map { it.enabled })
+        assertEquals(listOf("profile-a", "profile-disabled"), allSets.single().items.map { it.profileId })
+    }
+
+    @Test
     fun runRecordRepositoryShouldPersistTaskRunAndStepRuns() = runBlocking {
         taskRepository.upsertTaskDefinition(
             TaskDefinitionRecord(
@@ -257,6 +304,147 @@ class RoomRepositoriesTest {
         val recentRuns = runRecordRepository.listRecentTaskRuns(limit = 1)
 
         assertEquals(listOf("run-newer"), recentRuns.map { it.runId })
+    }
+
+    @Test
+    fun runRecordRepositoryShouldListRecentTaskRunsByTaskIdOrderedByStartedAtDesc() = runBlocking {
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-b",
+                name = "任务运行B",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-b\"}",
+                updatedAt = 101,
+            ),
+        )
+
+        runRecordRepository.upsertTaskRun(
+            TaskRunRecord(
+                runId = "run-a-older",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 100,
+                finishedAt = 150,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+        )
+        runRecordRepository.upsertTaskRun(
+            TaskRunRecord(
+                runId = "run-a-newer",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 300,
+                finishedAt = 350,
+                durationMs = 50,
+                triggerType = "cron",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+        )
+        runRecordRepository.upsertTaskRun(
+            TaskRunRecord(
+                runId = "run-b-only",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-b",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 400,
+                finishedAt = 450,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+        )
+
+        val recentRuns = runRecordRepository.listRecentTaskRunsByTaskId(taskId = "task-run-a", limit = 5)
+
+        assertEquals(listOf("run-a-newer", "run-a-older"), recentRuns.map { it.runId })
+    }
+
+    @Test
+    fun runRecordRepositoryShouldUseRunIdAsStableTieBreakerForRecentTaskRunsByTaskId() = runBlocking {
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        runRecordRepository.upsertTaskRun(
+            TaskRunRecord(
+                runId = "run-b",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 100,
+                finishedAt = 140,
+                durationMs = 40,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+        )
+        runRecordRepository.upsertTaskRun(
+            TaskRunRecord(
+                runId = "run-a",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 150,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+        )
+
+        val recentRuns = runRecordRepository.listRecentTaskRunsByTaskId(taskId = "task-run-a", limit = 5)
+
+        assertEquals(listOf("run-b", "run-a"), recentRuns.map { it.runId })
     }
 
     @Test

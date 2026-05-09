@@ -42,7 +42,7 @@ object SystemSchedulerTimeSource : SchedulerTimeSource {
     override fun nowMs(): Long = System.currentTimeMillis()
 
     override suspend fun delay(durationMs: Long) {
-        delay(durationMs)
+        kotlinx.coroutines.delay(durationMs)
     }
 }
 
@@ -61,6 +61,7 @@ object ScheduleStatus {
 
 object SchedulerFailureCode {
     const val SCHEDULER_CREDENTIAL_SET_UNAVAILABLE = "SCHEDULER_CREDENTIAL_SET_UNAVAILABLE"
+    const val SCHEDULER_EXECUTION_EXCEPTION = "SCHEDULER_EXECUTION_EXCEPTION"
     const val SCHED_CONFLICT_SKIPPED = "SCHED_CONFLICT_SKIPPED"
     const val SCHED_CONFLICT_DELAYED = "SCHED_CONFLICT_DELAYED"
     const val SCHED_MISSED_SKIPPED = "SCHED_MISSED_SKIPPED"

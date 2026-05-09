@@ -286,6 +286,229 @@ class TaskSchedulerServiceTest {
     }
 
     @Test
+    fun shouldBlockContinuousTaskWhenCredentialSetIsDisabled() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task",
+                    name = "Continuous Task",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task" to TaskScheduleStateRecord(
+                    taskId = "continuous-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = CredentialSetRecord(
+                credentialSetId = "smoke-set-a",
+                name = "Smoke Set",
+                description = null,
+                strategy = "round_robin",
+                enabled = false,
+                createdAt = 1L,
+                updatedAt = 1L,
+                items = listOf(CredentialSetItemRecord("smoke-set-a", "profile-a", 0, true)),
+            ),
+        )
+        val sessionRepository = FakeSessionRepository()
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-001" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertTrue(runner.invocations.isEmpty())
+        assertEquals(0, recorder.recordCount)
+        assertEquals(1, sessionRepository.terminalUpdates.size)
+        assertEquals(TaskRunStatus.BLOCKED, sessionRepository.terminalUpdates.single().status)
+        assertTrue(sessionRepository.runningSessions.isEmpty())
+        assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("continuous-task").lastScheduleStatus)
+        assertEquals(null, taskRepository.scheduleStates.getValue("continuous-task").nextTriggerAt)
+    }
+
+    @Test
+    fun shouldContinueDispatchingSamePackageContinuousTaskWhenEarlierTaskBlocks() = runBlocking {
+        val blockedTaskJson = continuousTaskJsonA.replace("\"smoke-set-a\"", "\"missing-set\"")
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task-a",
+                    name = "Continuous Task A",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = blockedTaskJson,
+                    updatedAt = 1L,
+                ),
+                TaskDefinitionRecord(
+                    taskId = "continuous-task-b",
+                    name = "Continuous Task B",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJsonB,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task-a" to TaskScheduleStateRecord(
+                    taskId = "continuous-task-a",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+                "continuous-task-b" to TaskScheduleStateRecord(
+                    taskId = "continuous-task-b",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = CredentialSetRecord(
+                credentialSetId = "smoke-set-a",
+                name = "Smoke Set",
+                description = null,
+                strategy = "round_robin",
+                enabled = true,
+                createdAt = 1L,
+                updatedAt = 1L,
+                items = listOf(CredentialSetItemRecord("smoke-set-a", "profile-a", 0, true)),
+            ),
+        )
+        val sessionRepository = FakeSessionRepository()
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-generated" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertEquals(listOf("continuous-task-b"), result.executedTaskIds)
+        assertEquals(1, runner.invocations.size)
+        assertEquals("continuous-task-b", runner.invocations.single().taskId)
+        assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("continuous-task-a").lastScheduleStatus)
+        assertEquals(6_000L, taskRepository.scheduleStates.getValue("continuous-task-b").nextTriggerAt)
+    }
+
+    @Test
+    fun shouldContinueDispatchAfterContinuousExecutionExceptionAndTerminateFailedSession() = runBlocking {
+        val otherPackageTaskJson = continuousTaskJsonB.replace("com.example.target", "com.example.other")
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task-a",
+                    name = "Continuous Task A",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJsonA,
+                    updatedAt = 1L,
+                ),
+                TaskDefinitionRecord(
+                    taskId = "continuous-task-b",
+                    name = "Continuous Task B",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = otherPackageTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task-a" to TaskScheduleStateRecord(
+                    taskId = "continuous-task-a",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+                "continuous-task-b" to TaskScheduleStateRecord(
+                    taskId = "continuous-task-b",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = CredentialSetRecord(
+                credentialSetId = "smoke-set-a",
+                name = "Smoke Set",
+                description = null,
+                strategy = "round_robin",
+                enabled = true,
+                createdAt = 1L,
+                updatedAt = 1L,
+                items = listOf(CredentialSetItemRecord("smoke-set-a", "profile-a", 0, true)),
+            ),
+        )
+        val sessionRepository = FakeSessionRepository()
+        val runner = RecordingTaskRunner(
+            status = TaskRunStatus.SUCCESS,
+            failureTaskIds = setOf("continuous-task-a"),
+        )
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-generated" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertEquals(listOf("continuous-task-b"), result.executedTaskIds)
+        assertEquals(2, runner.invocations.size)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("continuous-task-a").lastScheduleStatus)
+        assertEquals(1, sessionRepository.terminalUpdates.size)
+        assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, sessionRepository.terminalUpdates.single().lastErrorCode)
+        assertTrue(sessionRepository.runningSessions.containsKey("continuous-task-b"))
+        assertTrue(!sessionRepository.runningSessions.containsKey("continuous-task-a"))
+    }
+
+    @Test
     fun shouldPersistContinuousCredentialCursorAndAnnotateTaskRun() = runBlocking {
         val taskRepository = FakeTaskRepository(
             definitions = mutableListOf(
@@ -415,6 +638,259 @@ class TaskSchedulerServiceTest {
     }
 
     @Test
+    fun shouldResetContinuousCursorWhenCredentialSetChangesDuringRunningSession() = runBlocking {
+        val taskWithNewCredentialSetJson = continuousTaskJson.replace("\"smoke-set-a\"", "\"smoke-set-b\"")
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task",
+                    name = "Continuous Task",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = taskWithNewCredentialSetJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task" to TaskScheduleStateRecord(
+                    taskId = "continuous-task",
+                    nextTriggerAt = 6_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = 1_000L,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = CredentialSetRecord(
+                credentialSetId = "smoke-set-b",
+                name = "Smoke Set B",
+                description = null,
+                strategy = "round_robin",
+                enabled = true,
+                createdAt = 1L,
+                updatedAt = 1L,
+                items = listOf(
+                    CredentialSetItemRecord("smoke-set-b", "profile-c", 0, true),
+                    CredentialSetItemRecord("smoke-set-b", "profile-d", 1, true),
+                ),
+            ),
+            enabledProfiles = listOf(
+                CredentialProfileRecord(
+                    profileId = "profile-c",
+                    alias = "Alias C",
+                    tagsJson = "[]",
+                    enabled = true,
+                    createdAt = 1L,
+                    updatedAt = 1L,
+                ),
+                CredentialProfileRecord(
+                    profileId = "profile-d",
+                    alias = "Alias D",
+                    tagsJson = "[]",
+                    enabled = true,
+                    createdAt = 1L,
+                    updatedAt = 1L,
+                ),
+            ),
+        )
+        val sessionRepository = FakeSessionRepository(
+            runningSession = ContinuousSessionRecord(
+                sessionId = "session-001",
+                taskId = "continuous-task",
+                credentialSetId = "smoke-set-a",
+                status = "running",
+                startedAt = 1_000L,
+                finishedAt = null,
+                totalCycles = 1,
+                successCycles = 1,
+                failedCycles = 0,
+                currentCredentialProfileId = "profile-a",
+                currentCredentialAlias = "Alias A",
+                nextCredentialProfileId = "profile-b",
+                nextCredentialAlias = "Alias B",
+                cursorIndex = 1,
+                lastErrorCode = null,
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 6_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-unused" },
+        )
+
+        scheduler.dispatchDueTasks()
+
+        assertEquals("smoke-set-b", recorder.lastResult?.taskRun?.credentialSetId)
+        assertEquals("profile-c", recorder.lastResult?.taskRun?.credentialProfileId)
+        assertEquals("Alias C", recorder.lastResult?.taskRun?.credentialAlias)
+        val runningSession = sessionRepository.runningSessions.getValue("continuous-task")
+        assertEquals("smoke-set-b", runningSession.credentialSetId)
+        assertEquals("profile-c", runningSession.currentCredentialProfileId)
+        assertEquals("Alias C", runningSession.currentCredentialAlias)
+        assertEquals("profile-d", runningSession.nextCredentialProfileId)
+        assertEquals("Alias D", runningSession.nextCredentialAlias)
+        assertEquals(1, runningSession.cursorIndex)
+    }
+
+    @Test
+    fun shouldRestartFromFirstCredentialOnRecoveryWhenPersistCursorIsFalse() = runBlocking {
+        val nonPersistentCursorTaskJson = continuousTaskJson.replace("\"persistCursor\": true", "\"persistCursor\": false")
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task",
+                    name = "Continuous Task",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = nonPersistentCursorTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task" to TaskScheduleStateRecord(
+                    taskId = "continuous-task",
+                    nextTriggerAt = 6_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = 1_000L,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = multiProfileCredentialSet,
+            enabledProfiles = multiProfileEnabledProfiles,
+        )
+        val sessionRepository = FakeSessionRepository(
+            runningSession = ContinuousSessionRecord(
+                sessionId = "session-001",
+                taskId = "continuous-task",
+                credentialSetId = "smoke-set-a",
+                status = "running",
+                startedAt = 1_000L,
+                finishedAt = null,
+                totalCycles = 1,
+                successCycles = 1,
+                failedCycles = 0,
+                currentCredentialProfileId = "profile-a",
+                currentCredentialAlias = "Alias A",
+                nextCredentialProfileId = "profile-b",
+                nextCredentialAlias = "Alias B",
+                cursorIndex = 1,
+                lastErrorCode = null,
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 6_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-unused" },
+        )
+
+        scheduler.dispatchDueTasks(mode = SchedulerDispatchMode.RECOVERY)
+
+        assertEquals("profile-a", recorder.lastResult?.taskRun?.credentialProfileId)
+        assertEquals("Alias A", recorder.lastResult?.taskRun?.credentialAlias)
+    }
+
+    @Test
+    fun shouldResumeContinuousRotationByNextProfileIdWhenCredentialSetOrderChanges() = runBlocking {
+        val reorderedCredentialSet = CredentialSetRecord(
+            credentialSetId = "smoke-set-a",
+            name = "Smoke Set",
+            description = null,
+            strategy = "round_robin",
+            enabled = true,
+            createdAt = 1L,
+            updatedAt = 1L,
+            items = listOf(
+                CredentialSetItemRecord("smoke-set-a", "profile-b", 0, true),
+                CredentialSetItemRecord("smoke-set-a", "profile-a", 1, true),
+            ),
+        )
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task",
+                    name = "Continuous Task",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task" to TaskScheduleStateRecord(
+                    taskId = "continuous-task",
+                    nextTriggerAt = 6_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = 1_000L,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = reorderedCredentialSet,
+            enabledProfiles = multiProfileEnabledProfiles,
+        )
+        val sessionRepository = FakeSessionRepository(
+            runningSession = ContinuousSessionRecord(
+                sessionId = "session-001",
+                taskId = "continuous-task",
+                credentialSetId = "smoke-set-a",
+                status = "running",
+                startedAt = 1_000L,
+                finishedAt = null,
+                totalCycles = 1,
+                successCycles = 1,
+                failedCycles = 0,
+                currentCredentialProfileId = "profile-a",
+                currentCredentialAlias = "Alias A",
+                nextCredentialProfileId = "profile-b",
+                nextCredentialAlias = "Alias B",
+                cursorIndex = 1,
+                lastErrorCode = null,
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 6_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-unused" },
+        )
+
+        scheduler.dispatchDueTasks()
+
+        assertEquals("profile-b", recorder.lastResult?.taskRun?.credentialProfileId)
+        assertEquals("Alias B", recorder.lastResult?.taskRun?.credentialAlias)
+    }
+
+    @Test
     fun shouldStopContinuousSessionWhenCycleFailsAndPolicyIsStopSession() = runBlocking {
         val taskRepository = FakeTaskRepository(
             definitions = mutableListOf(
@@ -540,6 +1016,85 @@ class TaskSchedulerServiceTest {
         val terminalUpdate = sessionRepository.terminalUpdates.single()
         assertEquals("success", terminalUpdate.status)
         assertEquals(3, terminalUpdate.totalCycles)
+        assertEquals(null, taskRepository.scheduleStates.getValue("continuous-task").nextTriggerAt)
+    }
+
+    @Test
+    fun shouldTimeoutContinuousSessionBeforeExecutingWhenMaxDurationAlreadyReached() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "continuous-task",
+                    name = "Continuous Task",
+                    enabled = true,
+                    triggerType = "continuous",
+                    definitionStatus = "ready",
+                    rawJson = continuousTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "continuous-task" to TaskScheduleStateRecord(
+                    taskId = "continuous-task",
+                    nextTriggerAt = 601_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = 1_000L,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val credentialRepository = FakeCredentialRepository(
+            credentialSet = CredentialSetRecord(
+                credentialSetId = "smoke-set-a",
+                name = "Smoke Set",
+                description = null,
+                strategy = "round_robin",
+                enabled = true,
+                createdAt = 1L,
+                updatedAt = 1L,
+                items = listOf(CredentialSetItemRecord("smoke-set-a", "profile-a", 0, true)),
+            ),
+        )
+        val sessionRepository = FakeSessionRepository(
+            runningSession = ContinuousSessionRecord(
+                sessionId = "session-001",
+                taskId = "continuous-task",
+                credentialSetId = "smoke-set-a",
+                status = "running",
+                startedAt = 1_000L,
+                finishedAt = null,
+                totalCycles = 2,
+                successCycles = 2,
+                failedCycles = 0,
+                currentCredentialProfileId = "profile-a",
+                currentCredentialAlias = "profile-a",
+                nextCredentialProfileId = "profile-a",
+                nextCredentialAlias = "profile-a",
+                cursorIndex = 0,
+                lastErrorCode = null,
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = credentialRepository,
+            sessionRepository = sessionRepository,
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 601_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-unused" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertTrue(runner.invocations.isEmpty())
+        assertEquals(0, recorder.recordCount)
+        assertEquals(1, sessionRepository.terminalUpdates.size)
+        assertEquals(TaskRunStatus.TIMED_OUT, sessionRepository.terminalUpdates.single().status)
         assertEquals(null, taskRepository.scheduleStates.getValue("continuous-task").nextTriggerAt)
     }
 
@@ -693,11 +1248,15 @@ class TaskSchedulerServiceTest {
 
     private class RecordingTaskRunner(
         private val status: String,
+        private val failureTaskIds: Set<String> = emptySet(),
     ) : TaskRunner {
         val invocations = mutableListOf<Invocation>()
 
         override suspend fun run(task: com.plearn.appcontrol.dsl.TaskDefinition, triggerType: String): TaskExecutionResult {
             invocations += Invocation(task.taskId, triggerType)
+            if (task.taskId in failureTaskIds) {
+                throw IllegalStateException("runner failure for ${task.taskId}")
+            }
             return TaskExecutionResult(
                 taskRun = TaskRunRecord(
                     runId = "run-${invocations.size}",
@@ -802,6 +1361,12 @@ class TaskSchedulerServiceTest {
 
         override suspend fun upsertCredentialSecret(secret: com.plearn.appcontrol.data.model.CredentialSecretRecord) = Unit
 
+        override suspend fun getCredentialProfile(profileId: String): com.plearn.appcontrol.data.model.CredentialProfileRecord? =
+            enabledProfiles.firstOrNull { it.profileId == profileId }
+
+        override suspend fun listCredentialProfiles(): List<com.plearn.appcontrol.data.model.CredentialProfileRecord> =
+            getEnabledProfiles()
+
         override suspend fun getEnabledProfiles(): List<com.plearn.appcontrol.data.model.CredentialProfileRecord> =
             if (enabledProfiles.isNotEmpty()) {
                 enabledProfiles
@@ -822,6 +1387,8 @@ class TaskSchedulerServiceTest {
             }
 
         override suspend fun replaceCredentialSet(credentialSet: CredentialSetRecord) = Unit
+
+    override suspend fun listCredentialSets(): List<CredentialSetRecord> = listOfNotNull(credentialSet)
 
         override suspend fun getCredentialSet(credentialSetId: String): CredentialSetRecord? =
             if (credentialSet?.credentialSetId == credentialSetId) credentialSet else null

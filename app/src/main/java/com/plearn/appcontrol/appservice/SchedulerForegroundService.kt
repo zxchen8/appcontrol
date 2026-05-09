@@ -194,6 +194,12 @@ class SchedulerForegroundService : Service() {
                 .setAction(trigger.toServiceAction())
             ContextCompat.startForegroundService(context, intent)
         }
+
+        fun stop(context: Context) {
+            val intent = Intent(context, SchedulerForegroundService::class.java)
+                .setAction(ACTION_STOP)
+            ContextCompat.startForegroundService(context, intent)
+        }
     }
 }
 

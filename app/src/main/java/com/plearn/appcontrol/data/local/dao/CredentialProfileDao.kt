@@ -18,6 +18,9 @@ interface CredentialProfileDao {
     @Query("SELECT * FROM credential_profiles WHERE profileId = :profileId LIMIT 1")
     suspend fun getProfileById(profileId: String): CredentialProfileEntity?
 
+    @Query("SELECT * FROM credential_profiles ORDER BY alias ASC, profileId ASC")
+    suspend fun getAllProfiles(): List<CredentialProfileEntity>
+
     @Query("SELECT * FROM credential_profiles WHERE enabled = 1 ORDER BY alias ASC")
     suspend fun getEnabledProfiles(): List<CredentialProfileEntity>
 }

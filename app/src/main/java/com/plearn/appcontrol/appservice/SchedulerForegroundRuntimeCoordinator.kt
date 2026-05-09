@@ -62,10 +62,22 @@ class SchedulerForegroundRuntimeCoordinator @Inject constructor(
         recoveryAlarmScheduler.scheduleProcessRestartRecovery()
     }
 
-    private suspend fun activeScheduleCount(): Int = taskRepository.listTaskDefinitions().count { definition ->
-        definition.enabled &&
-            definition.definitionStatus.equals("ready", ignoreCase = true) &&
-            (definition.triggerType == "cron" || definition.triggerType == "continuous")
+    private suspend fun activeScheduleCount(): Int {
+        var activeCount = 0
+        for (definition in taskRepository.listTaskDefinitions()) {
+            if (!definition.enabled || !definition.definitionStatus.equals("ready", ignoreCase = true)) {
+                continue
+            }
+            if (definition.triggerType != "cron" && definition.triggerType != "continuous") {
+                continue
+            }
+
+            val scheduleState = taskRepository.getScheduleState(definition.taskId)
+            if (scheduleState == null || (scheduleState.standbyEnabled && scheduleState.nextTriggerAt != null)) {
+                activeCount += 1
+            }
+        }
+        return activeCount
     }
 
     private suspend fun nextStandbyTriggerAt(): Long? {

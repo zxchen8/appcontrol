@@ -9,8 +9,11 @@ import com.plearn.appcontrol.data.model.CredentialSetRecord
 interface CredentialRepository {
     suspend fun upsertCredentialProfile(profile: CredentialProfileRecord)
     suspend fun upsertCredentialSecret(secret: CredentialSecretRecord)
+    suspend fun getCredentialProfile(profileId: String): CredentialProfileRecord?
+    suspend fun listCredentialProfiles(): List<CredentialProfileRecord>
     suspend fun getEnabledProfiles(): List<CredentialProfileRecord>
     suspend fun replaceCredentialSet(credentialSet: CredentialSetRecord)
+    suspend fun listCredentialSets(): List<CredentialSetRecord>
     suspend fun getCredentialSet(credentialSetId: String): CredentialSetRecord?
 }
 
@@ -26,6 +29,12 @@ class RoomCredentialRepository(
         credentialProfileDao.upsertSecret(secret.toEntity())
     }
 
+    override suspend fun getCredentialProfile(profileId: String): CredentialProfileRecord? =
+        credentialProfileDao.getProfileById(profileId)?.toRecord()
+
+    override suspend fun listCredentialProfiles(): List<CredentialProfileRecord> =
+        credentialProfileDao.getAllProfiles().map { it.toRecord() }
+
     override suspend fun getEnabledProfiles(): List<CredentialProfileRecord> =
         credentialProfileDao.getEnabledProfiles().map { it.toRecord() }
 
@@ -35,6 +44,9 @@ class RoomCredentialRepository(
             items = credentialSet.items.map { it.toEntity() },
         )
     }
+
+    override suspend fun listCredentialSets(): List<CredentialSetRecord> =
+        credentialSetDao.getAllCredentialSetsWithItems().map { it.toRecord() }
 
     override suspend fun getCredentialSet(credentialSetId: String): CredentialSetRecord? =
         credentialSetDao.getCredentialSetWithItems(credentialSetId)?.toRecord()

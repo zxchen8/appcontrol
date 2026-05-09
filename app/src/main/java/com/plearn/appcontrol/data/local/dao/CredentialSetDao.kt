@@ -24,6 +24,10 @@ abstract class CredentialSetDao {
     @Query("SELECT * FROM credential_sets WHERE credentialSetId = :credentialSetId LIMIT 1")
     abstract suspend fun getCredentialSetWithItems(credentialSetId: String): CredentialSetWithItems?
 
+    @Transaction
+    @Query("SELECT * FROM credential_sets ORDER BY name ASC, credentialSetId ASC")
+    abstract suspend fun getAllCredentialSetsWithItems(): List<CredentialSetWithItems>
+
     @Query("SELECT * FROM credential_set_items WHERE credentialSetId = :credentialSetId ORDER BY orderNo ASC")
     abstract suspend fun getItemsForSet(credentialSetId: String): List<CredentialSetItemEntity>
 
