@@ -19,6 +19,9 @@ import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -340,7 +343,14 @@ class TaskSchedulerServiceTest {
 
         assertTrue(result.executedTaskIds.isEmpty())
         assertTrue(runner.invocations.isEmpty())
-        assertEquals(0, recorder.recordCount)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(TaskRunStatus.BLOCKED, recorder.lastResult?.taskRun?.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE, recorder.lastResult?.taskRun?.errorCode)
+        assertEquals(1, recorder.lastCycleNo)
+        assertEquals(
+            "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK",
+            recorder.lastResult?.taskRun?.artifactReason(),
+        )
         assertEquals(1, sessionRepository.terminalUpdates.size)
         assertEquals(TaskRunStatus.BLOCKED, sessionRepository.terminalUpdates.single().status)
         assertTrue(sessionRepository.runningSessions.isEmpty())
@@ -1158,7 +1168,14 @@ class TaskSchedulerServiceTest {
         scheduler.dispatchDueTasks()
 
         assertTrue(runner.invocations.isEmpty())
-        assertEquals(0, recorder.recordCount)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(TaskRunStatus.BLOCKED, recorder.lastResult?.taskRun?.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_CREDENTIAL_SET_UNAVAILABLE, recorder.lastResult?.taskRun?.errorCode)
+        assertEquals(3, recorder.lastCycleNo)
+        assertEquals(
+            "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK",
+            recorder.lastResult?.taskRun?.artifactReason(),
+        )
         assertEquals(1, sessionRepository.terminalUpdates.size)
         val terminalUpdate = sessionRepository.terminalUpdates.single()
         assertEquals(TaskRunStatus.BLOCKED, terminalUpdate.status)
@@ -1318,6 +1335,11 @@ class TaskSchedulerServiceTest {
             return persistedResult
         }
     }
+
+    private fun TaskRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["reason"]
+        ?.jsonPrimitive
+        ?.content
 
     private class FakeTaskExecutionLock(
         private val lockedPackages: MutableSet<String> = mutableSetOf(),

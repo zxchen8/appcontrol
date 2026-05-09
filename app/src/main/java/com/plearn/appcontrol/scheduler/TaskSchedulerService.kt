@@ -2,6 +2,7 @@ package com.plearn.appcontrol.scheduler
 
 import com.plearn.appcontrol.data.model.ContinuousSessionRecord
 import com.plearn.appcontrol.data.model.CredentialProfileRecord
+import com.plearn.appcontrol.data.model.TaskRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
 import com.plearn.appcontrol.data.repository.CredentialRepository
@@ -20,7 +21,10 @@ import com.plearn.appcontrol.runner.TaskRunner
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
+import java.util.UUID
 
 class TaskSchedulerService(
     private val parser: TaskDslParser,
@@ -33,6 +37,7 @@ class TaskSchedulerService(
     private val cronScheduleCalculator: CronScheduleCalculator = CronScheduleCalculator(),
     private val executionLock: TaskExecutionLock = InMemoryTaskExecutionLock(),
     private val sessionIdFactory: () -> String,
+    private val runIdFactory: () -> String = { UUID.randomUUID().toString() },
 ) {
     suspend fun dispatchDueTasks(mode: SchedulerDispatchMode = SchedulerDispatchMode.NORMAL): SchedulerDispatchResult {
         val nowMs = timeSource.nowMs()
@@ -434,6 +439,31 @@ class TaskSchedulerService(
             credentialSetId = credentialSetId,
             nowMs = nowMs,
         )
+        executionRecorder.record(
+            result = TaskExecutionResult(
+                taskRun = TaskRunRecord(
+                    runId = runIdFactory(),
+                    sessionId = session.sessionId,
+                    cycleNo = session.totalCycles + 1,
+                    taskId = executableTask.definitionRecord.taskId,
+                    credentialSetId = credentialSetId,
+                    credentialProfileId = null,
+                    credentialAlias = null,
+                    status = TaskRunStatus.BLOCKED,
+                    startedAt = nowMs,
+                    finishedAt = nowMs,
+                    durationMs = 0L,
+                    triggerType = RunTriggerType.CONTINUOUS,
+                    errorCode = errorCode,
+                    message = "Continuous task ${executableTask.definitionRecord.taskId} blocked before execution.",
+                    artifactsJson = buildPreRunBlockedArtifactJson(),
+                ),
+                stepRuns = emptyList(),
+                taskAttemptCount = 0,
+            ),
+            sessionId = session.sessionId,
+            cycleNo = session.totalCycles + 1,
+        )
         sessionRepository.updateTerminalState(
             sessionId = session.sessionId,
             status = TaskRunStatus.BLOCKED,
@@ -453,6 +483,13 @@ class TaskSchedulerService(
             ),
         )
     }
+
+    private fun buildPreRunBlockedArtifactJson(): String = buildJsonObject {
+        put("artifactType", "screenshot_skipped")
+        put("reason", PRE_RUN_BLOCKED_ARTIFACT_REASON)
+        put("captureRequested", false)
+        put("sensitiveContextActive", false)
+    }.toString()
 
     private suspend fun ensureSessionForPreRunFailure(
         runningSession: ContinuousSessionRecord?,
@@ -488,6 +525,10 @@ class TaskSchedulerService(
         val parseResult = parser.parse(definitionRecord.rawJson)
         val task = parseResult.task ?: return null
         return ParsedTask(task = task)
+    }
+
+    private companion object {
+        const val PRE_RUN_BLOCKED_ARTIFACT_REASON = "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK"
     }
 
     private fun createInitialScheduleState(task: TaskDefinition, nowMs: Long): TaskScheduleStateRecord =
