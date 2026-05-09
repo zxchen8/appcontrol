@@ -278,6 +278,21 @@ class TaskSchedulerService(
                     sessionRepository.upsertSession(activeSession)
                     sessionPersisted = true
                 }
+                executionRecorder.record(
+                    result = buildSyntheticContinuousRunResult(
+                        sessionId = activeSession.sessionId,
+                        cycleNo = activeSession.totalCycles + 1,
+                        taskId = executableTask.definitionRecord.taskId,
+                        credentialSetId = credentialSetId,
+                        nowMs = nowMs,
+                        status = TaskRunStatus.TIMED_OUT,
+                        errorCode = SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED,
+                        message = "Continuous task ${executableTask.definitionRecord.taskId} timed out before execution because the session reached maxDuration.",
+                        artifactsJson = buildPreRunTimedOutArtifactJson(),
+                    ),
+                    sessionId = activeSession.sessionId,
+                    cycleNo = activeSession.totalCycles + 1,
+                )
                 sessionRepository.updateTerminalState(
                     sessionId = activeSession.sessionId,
                     status = TaskRunStatus.TIMED_OUT,
@@ -285,7 +300,7 @@ class TaskSchedulerService(
                     totalCycles = activeSession.totalCycles,
                     successCycles = activeSession.successCycles,
                     failedCycles = activeSession.failedCycles,
-                    lastErrorCode = activeSession.lastErrorCode,
+                    lastErrorCode = SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED,
                 )
                 taskRepository.upsertScheduleState(
                     executableTask.scheduleState.copy(
@@ -404,6 +419,21 @@ class TaskSchedulerService(
                 throw error
             }
             if (sessionPersisted) {
+                executionRecorder.record(
+                    result = buildSyntheticContinuousRunResult(
+                        sessionId = activeSession.sessionId,
+                        cycleNo = activeSession.totalCycles + 1,
+                        taskId = executableTask.definitionRecord.taskId,
+                        credentialSetId = credentialSetId,
+                        nowMs = nowMs,
+                        status = TaskRunStatus.BLOCKED,
+                        errorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
+                        message = error.message ?: "Continuous task ${executableTask.definitionRecord.taskId} failed with an execution exception.",
+                        artifactsJson = buildExecutionExceptionArtifactJson(executableTask.task),
+                    ),
+                    sessionId = activeSession.sessionId,
+                    cycleNo = activeSession.totalCycles + 1,
+                )
                 sessionRepository.updateTerminalState(
                     sessionId = activeSession.sessionId,
                     status = TaskRunStatus.BLOCKED,
@@ -440,26 +470,16 @@ class TaskSchedulerService(
             nowMs = nowMs,
         )
         executionRecorder.record(
-            result = TaskExecutionResult(
-                taskRun = TaskRunRecord(
-                    runId = runIdFactory(),
-                    sessionId = session.sessionId,
-                    cycleNo = session.totalCycles + 1,
-                    taskId = executableTask.definitionRecord.taskId,
-                    credentialSetId = credentialSetId,
-                    credentialProfileId = null,
-                    credentialAlias = null,
-                    status = TaskRunStatus.BLOCKED,
-                    startedAt = nowMs,
-                    finishedAt = nowMs,
-                    durationMs = 0L,
-                    triggerType = RunTriggerType.CONTINUOUS,
-                    errorCode = errorCode,
-                    message = "Continuous task ${executableTask.definitionRecord.taskId} blocked before execution.",
-                    artifactsJson = buildPreRunBlockedArtifactJson(),
-                ),
-                stepRuns = emptyList(),
-                taskAttemptCount = 0,
+            result = buildSyntheticContinuousRunResult(
+                sessionId = session.sessionId,
+                cycleNo = session.totalCycles + 1,
+                taskId = executableTask.definitionRecord.taskId,
+                credentialSetId = credentialSetId,
+                nowMs = nowMs,
+                status = TaskRunStatus.BLOCKED,
+                errorCode = errorCode,
+                message = "Continuous task ${executableTask.definitionRecord.taskId} blocked before execution.",
+                artifactsJson = buildPreRunBlockedArtifactJson(),
             ),
             sessionId = session.sessionId,
             cycleNo = session.totalCycles + 1,
@@ -484,10 +504,62 @@ class TaskSchedulerService(
         )
     }
 
+    private fun buildSyntheticContinuousRunResult(
+        sessionId: String,
+        cycleNo: Int,
+        taskId: String,
+        credentialSetId: String?,
+        nowMs: Long,
+        status: String,
+        errorCode: String,
+        message: String,
+        artifactsJson: String,
+    ): TaskExecutionResult = TaskExecutionResult(
+        taskRun = TaskRunRecord(
+            runId = runIdFactory(),
+            sessionId = sessionId,
+            cycleNo = cycleNo,
+            taskId = taskId,
+            credentialSetId = credentialSetId,
+            credentialProfileId = null,
+            credentialAlias = null,
+            status = status,
+            startedAt = nowMs,
+            finishedAt = nowMs,
+            durationMs = 0L,
+            triggerType = RunTriggerType.CONTINUOUS,
+            errorCode = errorCode,
+            message = message,
+            artifactsJson = artifactsJson,
+        ),
+        stepRuns = emptyList(),
+        taskAttemptCount = 0,
+    )
+
     private fun buildPreRunBlockedArtifactJson(): String = buildJsonObject {
         put("artifactType", "screenshot_skipped")
         put("reason", PRE_RUN_BLOCKED_ARTIFACT_REASON)
         put("captureRequested", false)
+        put("sensitiveContextActive", false)
+    }.toString()
+
+    private fun buildPreRunTimedOutArtifactJson(): String = buildJsonObject {
+        put("artifactType", "screenshot_skipped")
+        put("reason", PRE_RUN_TIMEOUT_ARTIFACT_REASON)
+        put("captureRequested", false)
+        put("sensitiveContextActive", false)
+    }.toString()
+
+    private fun buildExecutionExceptionArtifactJson(task: TaskDefinition): String = buildJsonObject {
+        if (task.diagnostics.captureScreenshotOnFailure) {
+            put("artifactType", "screenshot_unavailable")
+            put("reason", EXECUTION_EXCEPTION_ARTIFACT_REASON)
+            put("captureRequested", true)
+        } else {
+            put("artifactType", "screenshot_skipped")
+            put("reason", "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY")
+            put("captureRequested", false)
+        }
         put("sensitiveContextActive", false)
     }.toString()
 
@@ -529,6 +601,8 @@ class TaskSchedulerService(
 
     private companion object {
         const val PRE_RUN_BLOCKED_ARTIFACT_REASON = "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK"
+        const val PRE_RUN_TIMEOUT_ARTIFACT_REASON = "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT"
+        const val EXECUTION_EXCEPTION_ARTIFACT_REASON = "DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION"
     }
 
     private fun createInitialScheduleState(task: TaskDefinition, nowMs: Long): TaskScheduleStateRecord =

@@ -269,6 +269,58 @@ class TaskMonitoringDetailServiceTest {
     }
 
     @Test
+    fun shouldFormatPreExecutionTimeoutRunArtifactReason() = runBlocking {
+        val runWithArtifact = newerRun.copy(
+            runId = "run-pre-execution-timeout",
+            status = "timed_out",
+            errorCode = "SCHEDULER_MAX_DURATION_REACHED",
+            message = "session maxDuration reached before execution",
+            artifactsJson = "{\"artifactType\":\"screenshot_skipped\",\"reason\":\"DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT\",\"captureRequested\":false,\"sensitiveContextActive\":false}",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(runWithArtifact)),
+                stepRunsByRunId = mapOf("run-pre-execution-timeout" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-pre-execution-timeout", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图已跳过 | 原因=执行前已达到会话超时条件，未采集截图 (DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT) | 请求截图=false | 敏感上下文=false"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+    }
+
+    @Test
+    fun shouldFormatExecutionExceptionRunArtifactReason() = runBlocking {
+        val runWithArtifact = newerRun.copy(
+            runId = "run-execution-exception",
+            status = "blocked",
+            errorCode = "SCHEDULER_EXECUTION_EXCEPTION",
+            message = "runner failure for continuous-task-a",
+            artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION\",\"captureRequested\":true,\"sensitiveContextActive\":false}",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(runWithArtifact)),
+                stepRunsByRunId = mapOf("run-execution-exception" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-execution-exception", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图不可用 | 原因=执行异常导致截图不可用 (DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION) | 请求截图=true | 敏感上下文=false"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+    }
+
+    @Test
     fun shouldNotTreatBlockedRunWithRecordedStepsAsPreActionBlock() = runBlocking {
         val blockedRun = newerRun.copy(
             runId = "run-blocked-with-steps",

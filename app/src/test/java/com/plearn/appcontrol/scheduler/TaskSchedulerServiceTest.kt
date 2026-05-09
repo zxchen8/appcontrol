@@ -510,10 +510,21 @@ class TaskSchedulerServiceTest {
 
         assertEquals(listOf("continuous-task-b"), result.executedTaskIds)
         assertEquals(2, runner.invocations.size)
-        assertEquals(1, recorder.recordCount)
+        assertEquals(2, recorder.recordCount)
+        val blockedResult = recorder.recordedResults.first { it.taskRun.taskId == "continuous-task-a" }
+        assertEquals(TaskRunStatus.BLOCKED, blockedResult.taskRun.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, blockedResult.taskRun.errorCode)
+        assertEquals(
+            "DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION",
+            blockedResult.taskRun.artifactReason(),
+        )
         assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("continuous-task-a").lastScheduleStatus)
         assertEquals(1, sessionRepository.terminalUpdates.size)
-        assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, sessionRepository.terminalUpdates.single().lastErrorCode)
+        val terminalUpdate = sessionRepository.terminalUpdates.single()
+        assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, terminalUpdate.lastErrorCode)
+        assertEquals(0, terminalUpdate.totalCycles)
+        assertEquals(0, terminalUpdate.successCycles)
+        assertEquals(0, terminalUpdate.failedCycles)
         assertTrue(sessionRepository.runningSessions.containsKey("continuous-task-b"))
         assertTrue(!sessionRepository.runningSessions.containsKey("continuous-task-a"))
     }
@@ -1102,9 +1113,21 @@ class TaskSchedulerServiceTest {
 
         assertTrue(result.executedTaskIds.isEmpty())
         assertTrue(runner.invocations.isEmpty())
-        assertEquals(0, recorder.recordCount)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(TaskRunStatus.TIMED_OUT, recorder.lastResult?.taskRun?.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED, recorder.lastResult?.taskRun?.errorCode)
+        assertEquals(3, recorder.lastCycleNo)
+        assertEquals(
+            "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT",
+            recorder.lastResult?.taskRun?.artifactReason(),
+        )
         assertEquals(1, sessionRepository.terminalUpdates.size)
-        assertEquals(TaskRunStatus.TIMED_OUT, sessionRepository.terminalUpdates.single().status)
+        val terminalUpdate = sessionRepository.terminalUpdates.single()
+        assertEquals(TaskRunStatus.TIMED_OUT, terminalUpdate.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED, terminalUpdate.lastErrorCode)
+        assertEquals(2, terminalUpdate.totalCycles)
+        assertEquals(2, terminalUpdate.successCycles)
+        assertEquals(0, terminalUpdate.failedCycles)
         assertEquals(null, taskRepository.scheduleStates.getValue("continuous-task").nextTriggerAt)
     }
 
@@ -1316,6 +1339,7 @@ class TaskSchedulerServiceTest {
         var lastSessionId: String? = null
         var lastCycleNo: Int? = null
         var lastResult: TaskExecutionResult? = null
+        val recordedResults = mutableListOf<TaskExecutionResult>()
 
         override suspend fun record(
             result: TaskExecutionResult,
@@ -1332,6 +1356,7 @@ class TaskSchedulerServiceTest {
             lastSessionId = sessionId
             lastCycleNo = cycleNo
             lastResult = persistedResult
+            recordedResults += persistedResult
             return persistedResult
         }
     }
