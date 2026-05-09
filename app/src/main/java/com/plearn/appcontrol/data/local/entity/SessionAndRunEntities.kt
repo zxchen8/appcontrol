@@ -1,5 +1,6 @@
 package com.plearn.appcontrol.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -74,6 +75,7 @@ data class TaskRunEntity(
     val triggerType: String,
     val errorCode: String?,
     val message: String?,
+    @ColumnInfo(defaultValue = "'{}'") val artifactsJson: String = "{}",
 )
 
 @Entity(

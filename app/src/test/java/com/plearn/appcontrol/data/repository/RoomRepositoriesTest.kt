@@ -201,6 +201,7 @@ class RoomRepositoriesTest {
                 triggerType = "manual",
                 errorCode = null,
                 message = null,
+                artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\"}",
             ),
         )
         runRecordRepository.insertStepRuns(
@@ -235,6 +236,10 @@ class RoomRepositoriesTest {
 
         assertNotNull(latestTaskRun)
         assertEquals("success", latestTaskRun?.status)
+        assertEquals(
+            "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\"}",
+            latestTaskRun?.artifactsJson,
+        )
         assertEquals(listOf("step-1", "step-2"), storedStepRuns.map { it.stepId })
         assertEquals(listOf("success", "failed"), storedStepRuns.map { it.status })
     }

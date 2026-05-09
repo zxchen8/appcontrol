@@ -192,6 +192,105 @@ class DefaultTaskRunnerTest {
         assertEquals(TaskRunStatus.TIMED_OUT, result.taskRun.status)
         assertEquals(CapabilityFailureCode.STEP_TIMEOUT, result.taskRun.errorCode)
         assertEquals(StepRunStatus.TIMED_OUT, result.stepRuns.single().status)
+        assertEquals("{}", result.taskRun.artifactsJson)
+    }
+
+    @Test
+    fun shouldRecordRunLevelArtifactWhenTaskTimesOutBeforeStepResultIsPersisted() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            waitDelayMs = 50
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-004b" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                executionPolicy = defaultExecutionPolicy(taskTimeoutMs = 10),
+                steps = listOf(waitElementStep(timeoutMs = 5_000)),
+            ),
+        )
+
+        assertEquals(TaskRunStatus.TIMED_OUT, result.taskRun.status)
+        assertEquals(emptyList<StepRunRecord>(), result.stepRuns)
+        assertEquals(
+            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
+            result.taskRun.artifactReason(),
+        )
+    }
+
+    @Test
+    fun shouldRecordSuppressedRunLevelArtifactWhenTaskTimesOutAfterSensitiveContextActivated() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            waitDelayMs = 50
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-004c" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                executionPolicy = defaultExecutionPolicy(taskTimeoutMs = 10),
+                variables = buildJsonObject {
+                    putJsonObject("secretPhone") {
+                        put("value", "13800138000")
+                        put("sensitive", true)
+                    }
+                },
+                steps = listOf(
+                    inputTextVariableRefStep("secretPhone"),
+                    waitElementStep(timeoutMs = 5_000),
+                ),
+            ),
+        )
+
+        assertEquals(TaskRunStatus.TIMED_OUT, result.taskRun.status)
+        assertEquals(listOf(StepRunStatus.SUCCESS), result.stepRuns.map(StepRunRecord::status))
+        assertEquals(
+            "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT",
+            result.taskRun.artifactReason(),
+        )
+    }
+
+    @Test
+    fun shouldRecordRunLevelArtifactAfterRecoveredStepRetryBeforeOuterTimeout() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "not found",
+            )
+            tapResults += CapabilityResult.Success(Unit)
+            waitDelayMs = 200
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-004d" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                executionPolicy = defaultExecutionPolicy(taskTimeoutMs = 50),
+                steps = listOf(
+                    tapElementStep(retry = StepRetryPolicy(maxRetries = 1, backoffMs = 0)),
+                    waitElementStep(timeoutMs = 5_000),
+                ),
+            ),
+        )
+
+        assertEquals(TaskRunStatus.TIMED_OUT, result.taskRun.status)
+        assertEquals(
+            listOf(StepRunStatus.FAILED, StepRunStatus.SUCCESS),
+            result.stepRuns.map(StepRunRecord::status),
+        )
+        assertEquals(
+            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
+            result.taskRun.artifactReason(),
+        )
     }
 
     @Test
@@ -426,10 +525,11 @@ class DefaultTaskRunnerTest {
     )
 
     private fun defaultExecutionPolicy(
+        taskTimeoutMs: Long = 60_000,
         maxRetries: Int = 0,
         retryBackoffMs: Long = 1_000,
     ): ExecutionPolicy = ExecutionPolicy(
-        taskTimeoutMs = 60_000,
+        taskTimeoutMs = taskTimeoutMs,
         maxRetries = maxRetries,
         retryBackoffMs = retryBackoffMs,
         conflictPolicy = ConflictPolicy.SKIP,
@@ -624,4 +724,9 @@ class DefaultTaskRunnerTest {
         ?.jsonPrimitive
         ?.content
         ?.toBooleanStrictOrNull()
+
+    private fun com.plearn.appcontrol.data.model.TaskRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["reason"]
+        ?.jsonPrimitive
+        ?.content
 }

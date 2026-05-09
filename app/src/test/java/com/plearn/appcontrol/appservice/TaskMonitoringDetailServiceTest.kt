@@ -243,6 +243,32 @@ class TaskMonitoringDetailServiceTest {
     }
 
     @Test
+    fun shouldPreferPersistedRunArtifactWhenAvailable() = runBlocking {
+        val runWithArtifact = newerRun.copy(
+            runId = "run-persisted-artifact",
+            status = "timed_out",
+            errorCode = "STEP_TIMEOUT",
+            message = "task timed out before step record",
+            artifactsJson = "{\"artifactType\":\"screenshot_skipped\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY\",\"captureRequested\":false,\"sensitiveContextActive\":false}",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(runWithArtifact)),
+                stepRunsByRunId = mapOf("run-persisted-artifact" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-persisted-artifact", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图已跳过 | 原因=诊断策略已关闭截图采集 (DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY) | 请求截图=false | 敏感上下文=false"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+    }
+
+    @Test
     fun shouldNotTreatBlockedRunWithRecordedStepsAsPreActionBlock() = runBlocking {
         val blockedRun = newerRun.copy(
             runId = "run-blocked-with-steps",

@@ -61,6 +61,7 @@ class DefaultTaskRunner(
                 runStartedAt = runStartedAt,
                 stepRuns = stepRuns,
                 terminalOutcome = terminalOutcome,
+                executionContext = executionContext,
             )
         } catch (_: CancellationException) {
             buildResult(
@@ -75,6 +76,7 @@ class DefaultTaskRunner(
                     message = "Task execution was cancelled.",
                     attemptCount = taskAttemptCount.coerceAtLeast(1),
                 ),
+                executionContext = executionContext,
             )
         }
     }
@@ -512,6 +514,7 @@ class DefaultTaskRunner(
         runStartedAt: Long,
         stepRuns: List<StepRunRecord>,
         terminalOutcome: TaskTerminalOutcome,
+        executionContext: RunnerExecutionContext,
     ): TaskExecutionResult {
         val finishedAt = timeSource.nowMs()
         return TaskExecutionResult(
@@ -530,9 +533,49 @@ class DefaultTaskRunner(
                 triggerType = triggerType,
                 errorCode = terminalOutcome.errorCode,
                 message = terminalOutcome.message,
+                artifactsJson = buildTaskFailureArtifactJson(
+                    diagnostics = task.diagnostics,
+                    terminalOutcome = terminalOutcome,
+                    stepRuns = stepRuns,
+                    sensitiveContextActive = executionContext.sensitiveContextActive,
+                ),
             ),
             stepRuns = stepRuns.toList(),
             taskAttemptCount = terminalOutcome.attemptCount,
+        )
+    }
+
+    private fun buildTaskFailureArtifactJson(
+        diagnostics: DiagnosticsPolicy,
+        terminalOutcome: TaskTerminalOutcome,
+        stepRuns: List<StepRunRecord>,
+        sensitiveContextActive: Boolean,
+    ): String {
+        if (terminalOutcome.status.equals(TaskRunStatus.SUCCESS, ignoreCase = true) ||
+            terminalOutcome.status.equals(TaskRunStatus.CANCELLED, ignoreCase = true)
+        ) {
+            return "{}"
+        }
+
+        val finalAttemptByStepId = linkedMapOf<String, StepRunRecord>()
+        stepRuns.forEach { step ->
+            finalAttemptByStepId[step.stepId] = step
+        }
+        val hasFailedSteps = finalAttemptByStepId.values.any { step ->
+            !step.status.equals(StepRunStatus.SUCCESS, ignoreCase = true) || step.errorCode != null
+        }
+        if (hasFailedSteps) {
+            return "{}"
+        }
+
+        val runDiagnostics = DiagnosticsPolicy(
+            captureScreenshotOnFailure = diagnostics.captureScreenshotOnFailure,
+            captureScreenshotOnStepFailure = diagnostics.captureScreenshotOnFailure,
+            logLevel = diagnostics.logLevel,
+        )
+        return buildFailureArtifactJson(
+            diagnostics = runDiagnostics,
+            sensitiveContextActive = sensitiveContextActive,
         )
     }
 

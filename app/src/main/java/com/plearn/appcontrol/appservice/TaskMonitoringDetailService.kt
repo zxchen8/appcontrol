@@ -108,6 +108,7 @@ class TaskMonitoringDetailService @Inject constructor(
         credentialAlias = credentialAlias,
         errorCode = errorCode,
         message = message,
+        artifactsJson = artifactsJson,
     )
 
     private fun DiagnosticsPolicy.toSummary(): TaskDiagnosticsSummary = TaskDiagnosticsSummary(
@@ -146,7 +147,7 @@ class TaskMonitoringDetailService @Inject constructor(
         val stepArtifacts = failedSteps.mapNotNull { step ->
             step.artifactsJson.toArtifactSummary(step.stepId)
         }.distinct()
-        val runArtifacts = buildRunArtifacts(
+        val runArtifacts = selectedRun.artifactsJson.toRunArtifactSummary()?.let(::listOf) ?: buildRunArtifacts(
             selectedRun = selectedRun,
             stepRuns = stepRuns,
             diagnostics = diagnostics,
@@ -195,6 +196,11 @@ class TaskMonitoringDetailService @Inject constructor(
     private fun String.toArtifactSummary(stepId: String): String? {
         val summary = toDiagnosticArtifactDisplayText() ?: return null
         return "$stepId=$summary"
+    }
+
+    private fun String.toRunArtifactSummary(): String? {
+        val summary = toDiagnosticArtifactDisplayText() ?: return null
+        return "run=$summary"
     }
 
     private companion object {

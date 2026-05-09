@@ -167,6 +167,7 @@ internal fun TaskRunEntity.toRecord(): TaskRunRecord = TaskRunRecord(
     triggerType = triggerType,
     errorCode = errorCode,
     message = message,
+    artifactsJson = artifactsJson,
 )
 
 internal fun TaskRunRecord.toEntity(): TaskRunEntity = TaskRunEntity(
@@ -184,6 +185,7 @@ internal fun TaskRunRecord.toEntity(): TaskRunEntity = TaskRunEntity(
     triggerType = triggerType,
     errorCode = errorCode,
     message = message,
+    artifactsJson = artifactsJson,
 )
 
 internal fun StepRunEntity.toRecord(): StepRunRecord = StepRunRecord(

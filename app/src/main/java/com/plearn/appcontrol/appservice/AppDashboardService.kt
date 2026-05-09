@@ -56,6 +56,7 @@ data class RecentRunSummary(
     val credentialAlias: String?,
     val errorCode: String?,
     val message: String? = null,
+    val artifactsJson: String = "{}",
 )
 
 class AppDashboardService @Inject constructor(
@@ -130,6 +131,7 @@ class AppDashboardService @Inject constructor(
         credentialAlias = credentialAlias,
         errorCode = errorCode,
         message = message,
+        artifactsJson = artifactsJson,
     )
 
     private companion object {

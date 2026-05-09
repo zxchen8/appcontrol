@@ -33,6 +33,7 @@ data class TaskRunRecord(
     val triggerType: String,
     val errorCode: String?,
     val message: String?,
+    val artifactsJson: String = "{}",
 )
 
 data class StepRunRecord(

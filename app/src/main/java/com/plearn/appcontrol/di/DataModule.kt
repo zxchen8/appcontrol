@@ -32,7 +32,7 @@ object DataModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppControlDatabase =
         Room.databaseBuilder(context, AppControlDatabase::class.java, DATABASE_NAME)
-            .fallbackToDestructiveMigration()
+            .addMigrations(AppControlDatabase.MIGRATION_1_2)
             .build()
 
     @Provides
