@@ -1029,7 +1029,12 @@ private fun TaskDashboardRow(
             )
             if (task.latestRunErrorCode != null) {
                 Text(
-                    text = "lastError=${task.latestRunErrorCode}",
+                    text = "lastError=${task.latestRunErrorCode}${task.latestRunMessage?.let { " | $it" } ?: ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (task.latestRunMessage != null) {
+                Text(
+                    text = "lastMessage=${task.latestRunMessage}",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1125,6 +1130,38 @@ private fun TaskMonitoringDetailCard(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    Text(text = "诊断策略", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = "captureFailure=${snapshot.diagnostics.captureScreenshotOnFailure} | captureStepFailure=${snapshot.diagnostics.captureScreenshotOnStepFailure} | logLevel=${snapshot.diagnostics.logLevel}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(text = "失败上下文", style = MaterialTheme.typography.titleSmall)
+                    if (snapshot.failureContext == null) {
+                        Text(text = "当前选中运行没有失败上下文。", style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Text(
+                            text = "run=${snapshot.failureContext.runId} | status=${snapshot.failureContext.status} | failedSteps=${snapshot.failureContext.failedStepCount}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (snapshot.failureContext.runErrorCode != null || snapshot.failureContext.runMessage != null) {
+                            Text(
+                                text = "runError=${snapshot.failureContext.runErrorCode ?: "none"}${snapshot.failureContext.runMessage?.let { " | $it" } ?: ""}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (snapshot.failureContext.primaryFailedStepId != null) {
+                            Text(
+                                text = "step=${snapshot.failureContext.primaryFailedStepId}${snapshot.failureContext.primaryFailedStepErrorCode?.let { " | error=$it" } ?: ""}${snapshot.failureContext.primaryFailedStepMessage?.let { " | $it" } ?: ""}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        snapshot.failureContext.stepArtifacts.forEach { artifact ->
+                            Text(
+                                text = "artifact=$artifact",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                     Text(text = "最近运行记录", style = MaterialTheme.typography.titleSmall)
                     if (snapshot.recentRuns.isEmpty()) {
                         Text(text = "当前任务还没有运行记录。", style = MaterialTheme.typography.bodyMedium)
@@ -1199,6 +1236,12 @@ private fun TaskMonitoringDetailCard(
                                     if (step.errorCode != null) {
                                         Text(
                                             text = "error=${step.errorCode}${step.message?.let { " | $it" } ?: ""}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                    step.artifactsJson.toArtifactsDisplayText()?.let { artifactsText ->
+                                        Text(
+                                            text = "artifacts=$artifactsText",
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                     }
@@ -1314,7 +1357,12 @@ private fun RecentRunsCard(recentRuns: List<RecentRunSummary>) {
                             )
                             if (run.errorCode != null) {
                                 Text(
-                                    text = "error=${run.errorCode}",
+                                    text = "error=${run.errorCode}${run.message?.let { " | $it" } ?: ""}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (run.message != null) {
+                                Text(
+                                    text = "message=${run.message}",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -1469,6 +1517,14 @@ private fun String.toBooleanFlag(): Boolean? = when (lowercase()) {
     "true", "enabled", "on", "1" -> true
     "false", "disabled", "off", "0" -> false
     else -> null
+}
+
+private fun String.toArtifactsDisplayText(): String? {
+    val normalized = trim()
+    if (normalized.isBlank() || normalized == "{}" || normalized == "[]") {
+        return null
+    }
+    return normalized
 }
 
 private val dashboardTimestampFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")

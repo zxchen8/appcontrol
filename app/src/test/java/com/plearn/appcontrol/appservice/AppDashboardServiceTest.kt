@@ -63,7 +63,7 @@ class AppDashboardServiceTest {
                         durationMs = 100L,
                         triggerType = "cron",
                         errorCode = null,
-                        message = null,
+                        message = "latest run completed",
                     ),
                 ),
             ),
@@ -94,6 +94,7 @@ class AppDashboardServiceTest {
 
         assertEquals(2, snapshot.tasks.size)
         assertEquals("success", snapshot.tasks[0].latestRunStatus)
+        assertEquals("latest run completed", snapshot.tasks[0].latestRunMessage)
         assertEquals(5_000L, snapshot.tasks[0].nextTriggerAt)
         assertEquals("账号A", snapshot.tasks[0].runningSession?.currentCredentialAlias)
         assertNull(snapshot.tasks[1].latestRunStatus)
@@ -133,7 +134,7 @@ class AppDashboardServiceTest {
                         durationMs = 200L,
                         triggerType = "manual",
                         errorCode = "RUNNER_STEP_FAILED",
-                        message = null,
+                        message = "tap login button failed",
                     ),
                     TaskRunRecord(
                         runId = "run-1",
@@ -183,6 +184,7 @@ class AppDashboardServiceTest {
         assertEquals(1, snapshot.recentRuns.size)
         assertEquals("run-2", snapshot.recentRuns[0].runId)
         assertEquals("任务 A", snapshot.recentRuns[0].taskName)
+        assertEquals("tap login button failed", snapshot.recentRuns[0].message)
     }
 
     private class FakeTaskRepository(

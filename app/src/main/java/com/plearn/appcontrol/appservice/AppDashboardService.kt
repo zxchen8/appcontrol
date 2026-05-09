@@ -26,6 +26,7 @@ data class TaskDashboardItem(
     val latestRunStartedAt: Long?,
     val latestRunTriggerType: String?,
     val latestRunErrorCode: String?,
+    val latestRunMessage: String?,
     val runningSession: RunningSessionSummary?,
 )
 
@@ -54,6 +55,7 @@ data class RecentRunSummary(
     val finishedAt: Long?,
     val credentialAlias: String?,
     val errorCode: String?,
+    val message: String? = null,
 )
 
 class AppDashboardService @Inject constructor(
@@ -83,6 +85,7 @@ class AppDashboardService @Inject constructor(
                 latestRunStartedAt = latestRun?.startedAt,
                 latestRunTriggerType = latestRun?.triggerType,
                 latestRunErrorCode = latestRun?.errorCode,
+                latestRunMessage = latestRun?.message,
                 runningSession = runningSessionByTaskId[definition.taskId],
             )
         }
@@ -126,6 +129,7 @@ class AppDashboardService @Inject constructor(
         finishedAt = finishedAt,
         credentialAlias = credentialAlias,
         errorCode = errorCode,
+        message = message,
     )
 
     private companion object {

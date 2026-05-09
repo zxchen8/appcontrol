@@ -37,11 +37,44 @@ class TaskMonitoringDetailServiceTest {
 
         assertNotNull(snapshot)
         assertEquals("task-a", snapshot?.definition?.taskId)
+        assertEquals(true, snapshot?.diagnostics?.captureScreenshotOnFailure)
         assertEquals(5_000L, snapshot?.scheduleState?.nextTriggerAt)
         assertEquals("账号A", snapshot?.runningSession?.currentCredentialAlias)
         assertEquals(listOf("run-newer", "run-older"), snapshot?.recentRuns?.map { it.runId })
         assertEquals("run-newer", snapshot?.selectedRun?.runId)
+        assertEquals("RUNNER_STEP_FAILED", snapshot?.failureContext?.runErrorCode)
         assertEquals(listOf("step-1", "step-2"), snapshot?.stepRuns?.map { it.stepId })
+    }
+
+    @Test
+    fun shouldExposeDiagnosticsPolicyAndArtifactsForFailedSelectedRun() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(
+                        stepRun1,
+                        stepRun2.copy(artifactsJson = "{\"artifactType\":\"screenshot_suppressed\",\"reason\":\"sensitive\"}"),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals(false, snapshot?.diagnostics?.captureScreenshotOnFailure)
+        assertEquals(false, snapshot?.diagnostics?.captureScreenshotOnStepFailure)
+        assertEquals("debug", snapshot?.diagnostics?.logLevel)
+        assertEquals("run-newer", snapshot?.failureContext?.runId)
+        assertEquals("run newer failed", snapshot?.failureContext?.runMessage)
+        assertEquals(1, snapshot?.failureContext?.failedStepCount)
+        assertEquals("step-2", snapshot?.failureContext?.primaryFailedStepId)
+        assertEquals(
+            listOf("step-2={\"artifactType\":\"screenshot_suppressed\",\"reason\":\"sensitive\"}"),
+            snapshot?.failureContext?.stepArtifacts,
+        )
     }
 
     @Test
@@ -72,7 +105,104 @@ class TaskMonitoringDetailServiceTest {
         val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-older", recentRunLimit = 5)
 
         assertEquals("run-older", snapshot?.selectedRun?.runId)
+        assertNull(snapshot?.failureContext)
         assertEquals(listOf("step-old"), snapshot?.stepRuns?.map { it.stepId })
+    }
+
+    @Test
+    fun shouldIgnoreRecoveredFailedAttemptsWhenRunSucceeds() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(olderRun)),
+                stepRunsByRunId = mapOf(
+                    "run-older" to listOf(
+                        StepRunRecord(
+                            runId = "run-older",
+                            stepId = "step-retry",
+                            status = "failed",
+                            startedAt = 1_001L,
+                            finishedAt = 1_020L,
+                            durationMs = 19L,
+                            errorCode = "RUNNER_STEP_FAILED",
+                            message = "first attempt failed",
+                            artifactsJson = "{}",
+                        ),
+                        StepRunRecord(
+                            runId = "run-older",
+                            stepId = "step-retry",
+                            status = "success",
+                            startedAt = 1_021L,
+                            finishedAt = 1_040L,
+                            durationMs = 19L,
+                            errorCode = null,
+                            message = null,
+                            artifactsJson = "{}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-older", recentRunLimit = 5)
+
+        assertEquals("run-older", snapshot?.selectedRun?.runId)
+        assertNull(snapshot?.failureContext)
+    }
+
+    @Test
+    fun shouldUseLatestFailedAttemptPerStepForFailureContext() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(
+                        StepRunRecord(
+                            runId = "run-newer",
+                            stepId = "step-retry",
+                            status = "failed",
+                            startedAt = 2_001L,
+                            finishedAt = 2_010L,
+                            durationMs = 9L,
+                            errorCode = "RUNNER_STEP_FAILED",
+                            message = "retry first failed",
+                            artifactsJson = "{}",
+                        ),
+                        StepRunRecord(
+                            runId = "run-newer",
+                            stepId = "step-retry",
+                            status = "success",
+                            startedAt = 2_011L,
+                            finishedAt = 2_020L,
+                            durationMs = 9L,
+                            errorCode = null,
+                            message = null,
+                            artifactsJson = "{}",
+                        ),
+                        StepRunRecord(
+                            runId = "run-newer",
+                            stepId = "step-terminal",
+                            status = "failed",
+                            startedAt = 2_021L,
+                            finishedAt = 2_040L,
+                            durationMs = 19L,
+                            errorCode = "RUNNER_STEP_FAILED",
+                            message = "terminal failed",
+                            artifactsJson = "{\"artifactType\":\"log\"}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals("step-terminal", snapshot?.failureContext?.primaryFailedStepId)
+        assertEquals(1, snapshot?.failureContext?.failedStepCount)
+        assertEquals(listOf("step-terminal={\"artifactType\":\"log\"}"), snapshot?.failureContext?.stepArtifacts)
     }
 
     @Test
@@ -233,14 +363,77 @@ class TaskMonitoringDetailServiceTest {
     }
 
     private companion object {
+                val validTaskRawJson = """
+                        {
+                            "schemaVersion": "1.0",
+                            "taskId": "task-a",
+                            "name": "任务 A",
+                            "enabled": true,
+                            "targetApp": { "packageName": "com.example.target" },
+                            "trigger": { "type": "continuous", "cooldownMs": 1000 },
+                            "accountRotation": { "credentialSetId": "set-a" },
+                            "executionPolicy": {
+                                "taskTimeoutMs": 60000,
+                                "maxRetries": 0,
+                                "retryBackoffMs": 1000,
+                                "conflictPolicy": "skip",
+                                "onMissedSchedule": "skip"
+                            },
+                            "steps": [
+                                {
+                                    "id": "step-1",
+                                    "type": "start_app",
+                                    "timeoutMs": 1000,
+                                    "params": { "packageName": "com.example.target" }
+                                }
+                            ]
+                        }
+                """.trimIndent()
+
+                val validTaskRawJsonWithDiagnostics = """
+                        {
+                            "schemaVersion": "1.0",
+                            "taskId": "task-a",
+                            "name": "任务 A",
+                            "enabled": true,
+                            "targetApp": { "packageName": "com.example.target" },
+                            "trigger": { "type": "continuous", "cooldownMs": 1000 },
+                            "accountRotation": { "credentialSetId": "set-a" },
+                            "diagnostics": {
+                                "captureScreenshotOnFailure": false,
+                                "captureScreenshotOnStepFailure": false,
+                                "logLevel": "debug"
+                            },
+                            "executionPolicy": {
+                                "taskTimeoutMs": 60000,
+                                "maxRetries": 0,
+                                "retryBackoffMs": 1000,
+                                "conflictPolicy": "skip",
+                                "onMissedSchedule": "skip"
+                            },
+                            "steps": [
+                                {
+                                    "id": "step-1",
+                                    "type": "start_app",
+                                    "timeoutMs": 1000,
+                                    "params": { "packageName": "com.example.target" }
+                                }
+                            ]
+                        }
+                """.trimIndent()
+
         val taskDefinitionRecord = TaskDefinitionRecord(
             taskId = "task-a",
             name = "任务 A",
             enabled = true,
             triggerType = "continuous",
             definitionStatus = "ready",
-            rawJson = "{}",
+            rawJson = validTaskRawJson,
             updatedAt = 100L,
+        )
+
+        val taskDefinitionWithDiagnostics = taskDefinitionRecord.copy(
+            rawJson = validTaskRawJsonWithDiagnostics,
         )
 
         val taskScheduleStateRecord = TaskScheduleStateRecord(
