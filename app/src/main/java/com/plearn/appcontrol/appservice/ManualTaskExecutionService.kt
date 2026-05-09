@@ -13,6 +13,8 @@ import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
 import java.util.UUID
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class ManualTaskExecutionService(
     private val parser: TaskDslParser,
@@ -66,9 +68,21 @@ class ManualTaskExecutionService(
                 triggerType = RunTriggerType.MANUAL,
                 errorCode = errorCode,
                 message = message,
+                artifactsJson = buildBlockedArtifactJson(),
             ),
             stepRuns = emptyList(),
             taskAttemptCount = 0,
         )
+    }
+
+    private fun buildBlockedArtifactJson(): String = buildJsonObject {
+        put("artifactType", "screenshot_skipped")
+        put("reason", BLOCKED_BEFORE_FIRST_ACTION_REASON)
+        put("captureRequested", false)
+        put("sensitiveContextActive", false)
+    }.toString()
+
+    private companion object {
+        const val BLOCKED_BEFORE_FIRST_ACTION_REASON = "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK"
     }
 }

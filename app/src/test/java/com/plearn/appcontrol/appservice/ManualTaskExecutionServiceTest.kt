@@ -13,6 +13,9 @@ import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -45,7 +48,45 @@ class ManualTaskExecutionServiceTest {
 
         assertEquals(TaskRunStatus.BLOCKED, result.taskRun.status)
         assertEquals(RunnerFailureCode.RUNNER_TASK_NOT_READY, result.taskRun.errorCode)
+        assertEquals(
+            "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK",
+            result.taskRun.artifactReason(),
+        )
         assertTrue(result.stepRuns.isEmpty())
+        assertEquals(0, runner.invocationCount)
+        assertEquals(0, recorder.recordCount)
+    }
+
+    @Test
+    fun shouldBlockManualRunWhenDslIsInvalid() = runBlocking {
+        val runner = RecordingTaskRunner()
+        val recorder = RecordingTaskExecutionRecorder()
+        val service = ManualTaskExecutionService(
+            parser = TaskDslParser(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedRunnerTimeSource(),
+            runIdFactory = { "invalid-dsl-run" },
+        )
+
+        val result = service.run(
+            TaskDefinitionRecord(
+                taskId = "task-02",
+                name = "Invalid DSL task",
+                enabled = true,
+                triggerType = "manual",
+                definitionStatus = "ready",
+                rawJson = "{\"schemaVersion\":\"1.0\",\"taskId\":\"task-02\"}",
+                updatedAt = 101L,
+            ),
+        )
+
+        assertEquals(TaskRunStatus.BLOCKED, result.taskRun.status)
+        assertEquals(RunnerFailureCode.RUNNER_DSL_INVALID, result.taskRun.errorCode)
+        assertEquals(
+            "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK",
+            result.taskRun.artifactReason(),
+        )
         assertEquals(0, runner.invocationCount)
         assertEquals(0, recorder.recordCount)
     }
@@ -212,4 +253,9 @@ class ManualTaskExecutionServiceTest {
             }
         """.trimIndent()
     }
+
+    private fun TaskRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["reason"]
+        ?.jsonPrimitive
+        ?.content
 }
