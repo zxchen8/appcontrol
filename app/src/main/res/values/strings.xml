@@ -3,4 +3,10 @@
     <string name="app_name">AppControl</string>
     <string name="accessibility_service_label">AppControl Accessibility</string>
     <string name="accessibility_service_description">为任务执行提供元素查询、等待和点击能力。</string>
+    <string name="scheduler_notification_channel_name">AppControl Scheduler</string>
+    <string name="scheduler_notification_channel_description">用于定时任务与连续任务的前台调度服务。</string>
+    <string name="scheduler_notification_title">AppControl 调度中</string>
+    <string name="scheduler_notification_recovering">正在恢复调度状态…</string>
+    <string name="scheduler_notification_running">待命任务 %1$d 个，最近恢复调度 %2$d 个任务。</string>
+    <string name="scheduler_notification_stop">停止</string>
 </resources>

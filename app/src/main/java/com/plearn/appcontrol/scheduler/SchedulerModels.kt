@@ -1,5 +1,7 @@
 package com.plearn.appcontrol.scheduler
 
+import kotlinx.coroutines.delay
+
 enum class SchedulerDispatchMode {
     NORMAL,
     RECOVERY,
@@ -32,10 +34,16 @@ class InMemoryTaskExecutionLock : TaskExecutionLock {
 
 interface SchedulerTimeSource {
     fun nowMs(): Long
+
+    suspend fun delay(durationMs: Long)
 }
 
 object SystemSchedulerTimeSource : SchedulerTimeSource {
     override fun nowMs(): Long = System.currentTimeMillis()
+
+    override suspend fun delay(durationMs: Long) {
+        delay(durationMs)
+    }
 }
 
 data class SchedulerDispatchResult(

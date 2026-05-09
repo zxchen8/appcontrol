@@ -873,6 +873,8 @@ class TaskSchedulerServiceTest {
         private val nowMs: Long,
     ) : SchedulerTimeSource {
         override fun nowMs(): Long = nowMs
+
+        override suspend fun delay(durationMs: Long) = Unit
     }
 
     private companion object {
