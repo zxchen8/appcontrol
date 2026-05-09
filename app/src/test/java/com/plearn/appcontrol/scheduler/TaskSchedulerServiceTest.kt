@@ -845,6 +845,9 @@ class TaskSchedulerServiceTest {
 
         override suspend fun findRunningSession(taskId: String): ContinuousSessionRecord? = runningSessions[taskId]
 
+        override suspend fun findRunningSessions(): List<ContinuousSessionRecord> =
+            runningSessions.values.sortedByDescending { it.startedAt }
+
         override suspend fun updateTerminalState(
             sessionId: String,
             status: String,

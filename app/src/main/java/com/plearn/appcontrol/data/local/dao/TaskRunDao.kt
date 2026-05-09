@@ -14,6 +14,9 @@ interface TaskRunDao {
     @Query("SELECT * FROM task_runs WHERE taskId = :taskId ORDER BY startedAt DESC LIMIT 1")
     suspend fun findLatestByTaskId(taskId: String): TaskRunEntity?
 
+    @Query("SELECT * FROM task_runs ORDER BY startedAt DESC LIMIT :limit")
+    suspend fun listRecent(limit: Int): List<TaskRunEntity>
+
     @Query("SELECT * FROM task_runs WHERE sessionId = :sessionId ORDER BY cycleNo ASC, startedAt ASC")
     suspend fun findBySessionId(sessionId: String): List<TaskRunEntity>
 }

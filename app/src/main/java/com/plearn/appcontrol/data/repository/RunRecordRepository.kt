@@ -8,6 +8,7 @@ import com.plearn.appcontrol.data.model.TaskRunRecord
 interface RunRecordRepository {
     suspend fun upsertTaskRun(taskRun: TaskRunRecord)
     suspend fun findLatestTaskRun(taskId: String): TaskRunRecord?
+    suspend fun listRecentTaskRuns(limit: Int): List<TaskRunRecord>
     suspend fun findTaskRunsBySession(sessionId: String): List<TaskRunRecord>
     suspend fun insertStepRuns(stepRuns: List<StepRunRecord>)
     suspend fun findStepRuns(runId: String): List<StepRunRecord>
@@ -23,6 +24,9 @@ class RoomRunRecordRepository(
 
     override suspend fun findLatestTaskRun(taskId: String): TaskRunRecord? =
         taskRunDao.findLatestByTaskId(taskId)?.toRecord()
+
+    override suspend fun listRecentTaskRuns(limit: Int): List<TaskRunRecord> =
+        taskRunDao.listRecent(limit).map { it.toRecord() }
 
     override suspend fun findTaskRunsBySession(sessionId: String): List<TaskRunRecord> =
         taskRunDao.findBySessionId(sessionId).map { it.toRecord() }

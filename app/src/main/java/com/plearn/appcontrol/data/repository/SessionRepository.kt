@@ -6,6 +6,7 @@ import com.plearn.appcontrol.data.model.ContinuousSessionRecord
 interface SessionRepository {
     suspend fun upsertSession(session: ContinuousSessionRecord)
     suspend fun findRunningSession(taskId: String): ContinuousSessionRecord?
+    suspend fun findRunningSessions(): List<ContinuousSessionRecord>
     suspend fun updateTerminalState(
         sessionId: String,
         status: String,
@@ -26,6 +27,9 @@ class RoomSessionRepository(
 
     override suspend fun findRunningSession(taskId: String): ContinuousSessionRecord? =
         continuousSessionDao.findRunningSessionByTaskId(taskId)?.toRecord()
+
+    override suspend fun findRunningSessions(): List<ContinuousSessionRecord> =
+        continuousSessionDao.findRunningSessions().map { it.toRecord() }
 
     override suspend fun updateTerminalState(
         sessionId: String,

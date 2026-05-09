@@ -14,6 +14,9 @@ interface ContinuousSessionDao {
     @Query("SELECT * FROM continuous_sessions WHERE taskId = :taskId AND status = 'running' LIMIT 1")
     suspend fun findRunningSessionByTaskId(taskId: String): ContinuousSessionEntity?
 
+    @Query("SELECT * FROM continuous_sessions WHERE status = 'running' ORDER BY startedAt DESC")
+    suspend fun findRunningSessions(): List<ContinuousSessionEntity>
+
     @Query("UPDATE continuous_sessions SET status = :status, finishedAt = :finishedAt, totalCycles = :totalCycles, successCycles = :successCycles, failedCycles = :failedCycles, lastErrorCode = :lastErrorCode WHERE sessionId = :sessionId")
     suspend fun updateTerminalState(
         sessionId: String,
