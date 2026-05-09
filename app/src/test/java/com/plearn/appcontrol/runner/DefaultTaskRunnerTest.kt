@@ -26,9 +26,13 @@ import com.plearn.appcontrol.dsl.TaskStep
 import com.plearn.appcontrol.dsl.TaskTrigger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -227,8 +231,182 @@ class DefaultTaskRunnerTest {
         )
     }
 
+    @Test
+    fun shouldRecordPolicyDisabledArtifactWhenStepFailureScreenshotIsDisabled() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "login button missing",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-006" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                diagnostics = DiagnosticsPolicy(captureScreenshotOnStepFailure = false),
+                steps = listOf(tapElementStep()),
+            ),
+        )
+
+        assertEquals(
+            "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY",
+            result.stepRuns.single().artifactReason(),
+        )
+    }
+
+    @Test
+    fun shouldSuppressScreenshotArtifactWhenFailureOccursAfterSensitiveInput() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "submit button missing",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-007" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                variables = buildJsonObject {
+                    putJsonObject("secretPhone") {
+                        put("value", "13800138000")
+                        put("sensitive", true)
+                    }
+                },
+                steps = listOf(
+                    inputTextVariableRefStep("secretPhone"),
+                    tapElementStep(),
+                ),
+            ),
+        )
+
+        assertEquals(
+            "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT",
+            result.stepRuns.last().artifactReason(),
+        )
+        assertEquals(true, result.stepRuns.last().artifactSensitiveContextActive())
+    }
+
+    @Test
+    fun shouldSuppressScreenshotArtifactWhenSensitiveInputStepFails() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            inputResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_EXECUTION_FAILED,
+                message = "keyboard dismissed",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-008" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                variables = buildJsonObject {
+                    putJsonObject("secretPhone") {
+                        put("value", "13800138000")
+                        put("sensitive", true)
+                    }
+                },
+                steps = listOf(inputTextVariableRefStep("secretPhone")),
+            ),
+        )
+
+        assertEquals(TaskRunStatus.FAILED, result.taskRun.status)
+        assertEquals(
+            "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT",
+            result.stepRuns.single().artifactReason(),
+        )
+        assertEquals(true, result.stepRuns.single().artifactSensitiveContextActive())
+    }
+
+    @Test
+    fun shouldClearSensitiveContextAfterStopAppBeforeLaterFailure() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "login button missing",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-008" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                variables = buildJsonObject {
+                    putJsonObject("secretPhone") {
+                        put("value", "13800138000")
+                        put("sensitive", true)
+                    }
+                },
+                steps = listOf(
+                    inputTextVariableRefStep("secretPhone"),
+                    stopAppStep(),
+                    tapElementStep(),
+                ),
+            ),
+        )
+
+        assertEquals(
+            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
+            result.stepRuns.last().artifactReason(),
+        )
+        assertEquals(false, result.stepRuns.last().artifactSensitiveContextActive())
+    }
+
+    @Test
+    fun shouldClearSensitiveContextAfterClearingStepBeforeLaterFailure() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Success(Unit)
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "login button missing",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-010" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                variables = buildJsonObject {
+                    putJsonObject("secretPhone") {
+                        put("value", "13800138000")
+                        put("sensitive", true)
+                    }
+                },
+                steps = listOf(
+                    inputTextVariableRefStep("secretPhone"),
+                    tapElementStep().copy(id = "step-clear", clearsSensitiveContext = true),
+                    tapElementStep().copy(id = "step-after-clear"),
+                ),
+            ),
+        )
+
+        assertEquals(
+            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
+            result.stepRuns.last().artifactReason(),
+        )
+        assertEquals(false, result.stepRuns.last().artifactSensitiveContextActive())
+    }
+
     private fun sampleTask(
         executionPolicy: ExecutionPolicy = defaultExecutionPolicy(),
+        diagnostics: DiagnosticsPolicy = DiagnosticsPolicy(),
+        variables: kotlinx.serialization.json.JsonObject? = null,
         steps: List<TaskStep>,
     ): TaskDefinition = TaskDefinition(
         schemaVersion = "1.0",
@@ -241,9 +419,9 @@ class DefaultTaskRunnerTest {
         accountRotation = null,
         executionPolicy = executionPolicy,
         preconditions = emptyList(),
-        variables = null,
+        variables = variables,
         steps = steps,
-        diagnostics = DiagnosticsPolicy(),
+        diagnostics = diagnostics,
         tags = emptyList(),
     )
 
@@ -320,6 +498,23 @@ class DefaultTaskRunnerTest {
         },
     )
 
+    private fun inputTextVariableRefStep(textRef: String): TaskStep = TaskStep(
+        id = "step-input-ref",
+        type = StepType.INPUT_TEXT,
+        name = null,
+        timeoutMs = 5_000,
+        retry = StepRetryPolicy(),
+        onFailure = StepFailurePolicy.STOP_TASK,
+        params = buildJsonObject {
+            put("textRef", textRef)
+            put("clearBeforeInput", true)
+            putJsonObject("selector") {
+                put("by", "resourceId")
+                put("value", "com.example.target:id/phone")
+            }
+        },
+    )
+
     private fun waitElementStep(timeoutMs: Long = 3_000): TaskStep = TaskStep(
         id = "step-wait-home",
         type = StepType.WAIT_ELEMENT,
@@ -339,6 +534,7 @@ class DefaultTaskRunnerTest {
     private class RecordingCapabilityFacade : CapabilityFacade {
         val operations = mutableListOf<String>()
         val tapResults = ArrayDeque<CapabilityResult<Unit>>()
+        val inputResults = ArrayDeque<CapabilityResult<InputTextSummary>>()
         val waitResults = ArrayDeque<CapabilityResult<Unit>>()
         var waitDelayMs: Long = 0
 
@@ -378,13 +574,17 @@ class DefaultTaskRunnerTest {
 
         override suspend fun inputText(request: InputTextRequest): CapabilityResult<InputTextSummary> {
             operations += "input:${request.text}:${request.masked}:${request.source.name}"
-            return CapabilityResult.Success(
-                InputTextSummary(
-                    selectorSummary = request.selector?.value,
-                    source = request.source,
-                    masked = request.masked,
-                ),
-            )
+            return if (inputResults.isEmpty()) {
+                CapabilityResult.Success(
+                    InputTextSummary(
+                        selectorSummary = request.selector?.value,
+                        source = request.source,
+                        masked = request.masked,
+                    ),
+                )
+            } else {
+                inputResults.removeFirst()
+            }
         }
 
         override suspend fun waitForElement(
@@ -413,4 +613,15 @@ class DefaultTaskRunnerTest {
             currentTimeMs += durationMs
         }
     }
+
+    private fun StepRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["reason"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun StepRunRecord.artifactSensitiveContextActive(): Boolean? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["sensitiveContextActive"]
+        ?.jsonPrimitive
+        ?.content
+        ?.toBooleanStrictOrNull()
 }

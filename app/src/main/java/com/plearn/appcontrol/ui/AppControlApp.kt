@@ -47,6 +47,7 @@ import com.plearn.appcontrol.appservice.TaskMonitoringDetailSnapshot
 import com.plearn.appcontrol.appservice.TapSmokeCheckRequest
 import com.plearn.appcontrol.capability.ElementSelector
 import com.plearn.appcontrol.capability.SelectorType
+import com.plearn.appcontrol.diagnostics.toDiagnosticArtifactDisplayText
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -1520,11 +1521,7 @@ private fun String.toBooleanFlag(): Boolean? = when (lowercase()) {
 }
 
 private fun String.toArtifactsDisplayText(): String? {
-    val normalized = trim()
-    if (normalized.isBlank() || normalized == "{}" || normalized == "[]") {
-        return null
-    }
-    return normalized
+    return toDiagnosticArtifactDisplayText()
 }
 
 private val dashboardTimestampFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")

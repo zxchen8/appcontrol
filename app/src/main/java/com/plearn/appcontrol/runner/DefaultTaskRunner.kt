@@ -13,6 +13,7 @@ import com.plearn.appcontrol.capability.TapTarget
 import com.plearn.appcontrol.capability.WaitElementState
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
+import com.plearn.appcontrol.dsl.DiagnosticsPolicy
 import com.plearn.appcontrol.dsl.StepFailurePolicy
 import com.plearn.appcontrol.dsl.StepType
 import com.plearn.appcontrol.dsl.TaskDefinition
@@ -22,9 +23,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import java.util.UUID
 
 class DefaultTaskRunner(
@@ -36,11 +39,12 @@ class DefaultTaskRunner(
         val runId = runIdFactory()
         val runStartedAt = timeSource.nowMs()
         val stepRuns = mutableListOf<StepRunRecord>()
+        val executionContext = RunnerExecutionContext()
         var taskAttemptCount = 0
 
         return try {
             val terminalOutcome = withTimeoutOrNull(task.executionPolicy.taskTimeoutMs) {
-                executeTask(task = task, runId = runId, stepRuns = stepRuns).also {
+                executeTask(task = task, runId = runId, stepRuns = stepRuns, executionContext = executionContext).also {
                     taskAttemptCount = it.attemptCount
                 }
             } ?: TaskTerminalOutcome(
@@ -79,6 +83,7 @@ class DefaultTaskRunner(
         task: TaskDefinition,
         runId: String,
         stepRuns: MutableList<StepRunRecord>,
+        executionContext: RunnerExecutionContext,
     ): TaskTerminalOutcome {
         val maxAttempts = task.executionPolicy.maxRetries + 1
         var lastOutcome = TaskTerminalOutcome(
@@ -89,7 +94,7 @@ class DefaultTaskRunner(
         )
 
         for (attempt in 1..maxAttempts) {
-            val attemptOutcome = executeAttempt(task = task, runId = runId, stepRuns = stepRuns)
+            val attemptOutcome = executeAttempt(task = task, runId = runId, stepRuns = stepRuns, executionContext = executionContext)
             if (attemptOutcome.success) {
                 return TaskTerminalOutcome(
                     status = TaskRunStatus.SUCCESS,
@@ -122,9 +127,18 @@ class DefaultTaskRunner(
         task: TaskDefinition,
         runId: String,
         stepRuns: MutableList<StepRunRecord>,
+        executionContext: RunnerExecutionContext,
     ): AttemptOutcome {
         for (step in task.steps) {
-            when (val stepOutcome = executeStepWithRetries(task = task, step = step, runId = runId, stepRuns = stepRuns)) {
+            when (
+                val stepOutcome = executeStepWithRetries(
+                    task = task,
+                    step = step,
+                    runId = runId,
+                    stepRuns = stepRuns,
+                    executionContext = executionContext,
+                )
+            ) {
                 is StepOutcome.ContinueSuccess -> Unit
                 is StepOutcome.ContinueAfterFailure -> Unit
                 is StepOutcome.FailTask -> return AttemptOutcome(
@@ -151,8 +165,10 @@ class DefaultTaskRunner(
         step: TaskStep,
         runId: String,
         stepRuns: MutableList<StepRunRecord>,
+        executionContext: RunnerExecutionContext,
     ): StepOutcome {
         val maxAttempts = step.retry.maxRetries + 1
+        val stepUsesSensitiveInput = stepActivatesSensitiveContext(task = task, step = step)
 
         for (attempt in 1..maxAttempts) {
             val stepStartedAt = timeSource.nowMs()
@@ -169,6 +185,10 @@ class DefaultTaskRunner(
 
             when (execution) {
                 is StepExecutionSuccess -> {
+                    executionContext.onStepSucceeded(
+                        step = step,
+                        activatesSensitiveContext = stepUsesSensitiveInput,
+                    )
                     stepRuns += StepRunRecord(
                         runId = runId,
                         stepId = step.id,
@@ -193,7 +213,10 @@ class DefaultTaskRunner(
                         durationMs = stepFinishedAt - stepStartedAt,
                         errorCode = execution.errorCode,
                         message = execution.message,
-                        artifactsJson = "{}",
+                        artifactsJson = buildFailureArtifactJson(
+                            diagnostics = task.diagnostics,
+                            sensitiveContextActive = executionContext.sensitiveContextActive || stepUsesSensitiveInput,
+                        ),
                     )
 
                     if (attempt < maxAttempts) {
@@ -423,6 +446,43 @@ class DefaultTaskRunner(
         else -> null
     }
 
+    private fun stepActivatesSensitiveContext(task: TaskDefinition, step: TaskStep): Boolean {
+        if (step.type != StepType.INPUT_TEXT) {
+            return false
+        }
+        val textRef = step.params.stringValue("textRef") ?: return false
+        return resolveTextReference(task, textRef)?.masked == true
+    }
+
+    private fun buildFailureArtifactJson(
+        diagnostics: DiagnosticsPolicy,
+        sensitiveContextActive: Boolean,
+    ): String {
+        val artifact = when {
+            !diagnostics.captureScreenshotOnStepFailure -> DiagnosticArtifact(
+                artifactType = "screenshot_skipped",
+                reason = RunnerDiagnosticArtifactReason.SCREENSHOT_CAPTURE_DISABLED_BY_POLICY,
+                captureRequested = false,
+                sensitiveContextActive = sensitiveContextActive,
+            )
+
+            sensitiveContextActive -> DiagnosticArtifact(
+                artifactType = "screenshot_suppressed",
+                reason = RunnerDiagnosticArtifactReason.SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT,
+                captureRequested = true,
+                sensitiveContextActive = true,
+            )
+
+            else -> DiagnosticArtifact(
+                artifactType = "screenshot_unavailable",
+                reason = RunnerDiagnosticArtifactReason.SCREENSHOT_CAPTURE_NOT_IMPLEMENTED,
+                captureRequested = true,
+                sensitiveContextActive = false,
+            )
+        }
+        return artifact.toJson()
+    }
+
     private fun JsonObject.toSelector(): ElementSelector? {
         val by = when (stringValue("by")?.lowercase()) {
             "resourceid" -> SelectorType.RESOURCE_ID
@@ -490,6 +550,39 @@ class DefaultTaskRunner(
         val message: String?,
         val attemptCount: Int,
     )
+
+    private data class RunnerExecutionContext(
+        var sensitiveContextActive: Boolean = false,
+    ) {
+        fun onStepSucceeded(step: TaskStep, activatesSensitiveContext: Boolean) {
+            if (step.clearsSensitiveContext || step.type == StepType.START_APP || step.type == StepType.RESTART_APP || step.type == StepType.STOP_APP) {
+                sensitiveContextActive = false
+            }
+            if (activatesSensitiveContext) {
+                sensitiveContextActive = true
+            }
+        }
+    }
+
+    private data class DiagnosticArtifact(
+        val artifactType: String,
+        val reason: String,
+        val captureRequested: Boolean,
+        val sensitiveContextActive: Boolean,
+    ) {
+        fun toJson(): String = buildJsonObject {
+            put("artifactType", artifactType)
+            put("reason", reason)
+            put("captureRequested", captureRequested)
+            put("sensitiveContextActive", sensitiveContextActive)
+        }.toString()
+    }
+
+    private object RunnerDiagnosticArtifactReason {
+        const val SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT = "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT"
+        const val SCREENSHOT_CAPTURE_DISABLED_BY_POLICY = "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY"
+        const val SCREENSHOT_CAPTURE_NOT_IMPLEMENTED = "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED"
+    }
 
     private sealed interface StepExecutionTerminal
 

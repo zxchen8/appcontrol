@@ -72,7 +72,91 @@ class TaskMonitoringDetailServiceTest {
         assertEquals(1, snapshot?.failureContext?.failedStepCount)
         assertEquals("step-2", snapshot?.failureContext?.primaryFailedStepId)
         assertEquals(
-            listOf("step-2={\"artifactType\":\"screenshot_suppressed\",\"reason\":\"sensitive\"}"),
+            listOf("step-2=截图已抑制 | 原因=sensitive"),
+            snapshot?.failureContext?.stepArtifacts,
+        )
+    }
+
+    @Test
+    fun shouldFormatStructuredRunnerArtifactReasonsForFailureContext() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(
+                        stepRun1,
+                        stepRun2.copy(
+                            artifactsJson = "{\"artifactType\":\"screenshot_suppressed\",\"reason\":\"DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT\",\"captureRequested\":true,\"sensitiveContextActive\":true}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals(
+            listOf(
+                "step-2=截图已抑制 | 原因=敏感内容，禁止采集 (DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT) | 请求截图=true | 敏感上下文=true",
+            ),
+            snapshot?.failureContext?.stepArtifacts,
+        )
+    }
+
+    @Test
+    fun shouldFormatPolicyDisabledScreenshotArtifactForFailureContext() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(
+                        stepRun1,
+                        stepRun2.copy(
+                            artifactsJson = "{\"artifactType\":\"screenshot_skipped\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY\",\"captureRequested\":false,\"sensitiveContextActive\":false}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals(
+            listOf(
+                "step-2=截图已跳过 | 原因=诊断策略已关闭截图采集 (DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY) | 请求截图=false | 敏感上下文=false",
+            ),
+            snapshot?.failureContext?.stepArtifacts,
+        )
+    }
+
+    @Test
+    fun shouldPreserveRawPayloadForKnownArtifactWhenAdditionalFieldsExist() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(
+                        stepRun1,
+                        stepRun2.copy(
+                            artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"captureRequested\":true,\"sensitiveContextActive\":false,\"collector\":\"runner-v2\"}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals(
+            listOf(
+                "step-2=截图不可用 | 原因=当前版本未实现截图采集 (DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED) | 请求截图=true | 敏感上下文=false | raw={\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"captureRequested\":true,\"sensitiveContextActive\":false,\"collector\":\"runner-v2\"}",
+            ),
             snapshot?.failureContext?.stepArtifacts,
         )
     }

@@ -7,6 +7,7 @@ import com.plearn.appcontrol.data.model.TaskRunRecord
 import com.plearn.appcontrol.data.repository.RunRecordRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
 import com.plearn.appcontrol.data.repository.TaskRepository
+import com.plearn.appcontrol.diagnostics.toDiagnosticArtifactDisplayText
 import com.plearn.appcontrol.dsl.DiagnosticsPolicy
 import com.plearn.appcontrol.dsl.TaskDslParser
 import javax.inject.Inject
@@ -157,11 +158,8 @@ class TaskMonitoringDetailService @Inject constructor(
     }
 
     private fun String.toArtifactSummary(stepId: String): String? {
-        val normalized = trim()
-        if (normalized.isBlank() || normalized == "{}" || normalized == "[]") {
-            return null
-        }
-        return "$stepId=$normalized"
+        val summary = toDiagnosticArtifactDisplayText() ?: return null
+        return "$stepId=$summary"
     }
 
     private companion object {
