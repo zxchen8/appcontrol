@@ -18,6 +18,7 @@ import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class TaskSchedulerServiceTest {
@@ -75,6 +77,231 @@ class TaskSchedulerServiceTest {
         assertEquals(1, recorder.recordCount)
         assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
         assertTrue(taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt!! > 1_000L)
+    }
+
+    @Test
+    fun shouldRecordBlockedCronRunWhenExecutionThrowsException() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(
+            status = TaskRunStatus.SUCCESS,
+            failureTaskIds = setOf("cron-task"),
+        )
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertEquals(1, runner.invocations.size)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(TaskRunStatus.BLOCKED, recorder.lastResult?.taskRun?.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, recorder.lastResult?.taskRun?.errorCode)
+        assertEquals(
+            "DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION",
+            recorder.lastResult?.taskRun?.artifactReason(),
+        )
+        assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
+        assertTrue(taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt!! > 1_000L)
+    }
+
+    @Test
+    fun shouldNotRecordSyntheticCronRunWhenRecorderThrows() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(status = TaskRunStatus.SUCCESS)
+        val recorder = RecordingTaskExecutionRecorder(failureOnRecordCount = 1)
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        try {
+            scheduler.dispatchDueTasks()
+            fail("Expected recorder failure to propagate")
+        } catch (error: IllegalStateException) {
+            assertEquals("recorder failure", error.message)
+        }
+
+        assertEquals(1, runner.invocations.size)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(1, recorder.recordedResults.size)
+        assertEquals(TaskRunStatus.SUCCESS, recorder.recordedResults.single().taskRun.status)
+        assertEquals(ScheduleStatus.SCHEDULED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
+        assertEquals(null, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt)
+    }
+
+    @Test
+    fun shouldNotUpdateCronScheduleStateWhenSyntheticRecordingThrows() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(
+            status = TaskRunStatus.SUCCESS,
+            failureTaskIds = setOf("cron-task"),
+        )
+        val recorder = RecordingTaskExecutionRecorder(failureOnRecordCount = 1)
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        try {
+            scheduler.dispatchDueTasks()
+            fail("Expected recorder failure to propagate")
+        } catch (error: IllegalStateException) {
+            assertEquals("recorder failure", error.message)
+        }
+
+        assertEquals(1, runner.invocations.size)
+        assertEquals(1, recorder.recordCount)
+        assertEquals(1, recorder.recordedResults.size)
+        assertEquals(TaskRunStatus.BLOCKED, recorder.recordedResults.single().taskRun.status)
+        assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, recorder.recordedResults.single().taskRun.errorCode)
+        assertEquals(ScheduleStatus.SCHEDULED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
+        assertEquals(null, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt)
+    }
+
+    @Test
+    fun shouldPropagateCronCancellationWithoutSyntheticRun() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(
+            status = TaskRunStatus.SUCCESS,
+            cancellationTaskIds = setOf("cron-task"),
+        )
+        val recorder = RecordingTaskExecutionRecorder()
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+        )
+
+        try {
+            scheduler.dispatchDueTasks()
+            fail("Expected cancellation to propagate")
+        } catch (error: CancellationException) {
+            assertEquals("runner cancellation for cron-task", error.message)
+        }
+
+        assertEquals(1, runner.invocations.size)
+        assertEquals(0, recorder.recordCount)
+        assertTrue(recorder.recordedResults.isEmpty())
+        assertEquals(ScheduleStatus.SCHEDULED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
+        assertEquals(null, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
+        assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt)
     }
 
     @Test
@@ -1289,11 +1516,15 @@ class TaskSchedulerServiceTest {
     private class RecordingTaskRunner(
         private val status: String,
         private val failureTaskIds: Set<String> = emptySet(),
+        private val cancellationTaskIds: Set<String> = emptySet(),
     ) : TaskRunner {
         val invocations = mutableListOf<Invocation>()
 
         override suspend fun run(task: com.plearn.appcontrol.dsl.TaskDefinition, triggerType: String): TaskExecutionResult {
             invocations += Invocation(task.taskId, triggerType)
+            if (task.taskId in cancellationTaskIds) {
+                throw CancellationException("runner cancellation for ${task.taskId}")
+            }
             if (task.taskId in failureTaskIds) {
                 throw IllegalStateException("runner failure for ${task.taskId}")
             }
@@ -1334,7 +1565,9 @@ class TaskSchedulerServiceTest {
 
     private data class Invocation(val taskId: String, val triggerType: String)
 
-    private class RecordingTaskExecutionRecorder : TaskExecutionRecorder {
+    private class RecordingTaskExecutionRecorder(
+        private val failureOnRecordCount: Int? = null,
+    ) : TaskExecutionRecorder {
         var recordCount: Int = 0
         var lastSessionId: String? = null
         var lastCycleNo: Int? = null
@@ -1357,6 +1590,9 @@ class TaskSchedulerServiceTest {
             lastCycleNo = cycleNo
             lastResult = persistedResult
             recordedResults += persistedResult
+            if (failureOnRecordCount == recordCount) {
+                throw IllegalStateException("recorder failure")
+            }
             return persistedResult
         }
     }

@@ -177,23 +177,21 @@ class TaskSchedulerService(
 
     private suspend fun executeCronTask(executableTask: ExecutableTask, nowMs: Long): Boolean {
         val trigger = executableTask.task.trigger as TaskTrigger.Cron
-        return try {
-            val execution = executionRecorder.record(
-                result = taskRunner.run(executableTask.task, RunTriggerType.CRON),
-            )
-            taskRepository.upsertScheduleState(
-                executableTask.scheduleState.copy(
-                    nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
-                    standbyEnabled = executableTask.definitionRecord.enabled,
-                    lastTriggerAt = nowMs,
-                    lastScheduleStatus = if (execution.taskRun.status == TaskRunStatus.BLOCKED) ScheduleStatus.BLOCKED else ScheduleStatus.SCHEDULED,
-                ),
-            )
-            true
+        val execution = try {
+            taskRunner.run(executableTask.task, RunTriggerType.CRON)
         } catch (error: Exception) {
             if (error is CancellationException) {
                 throw error
             }
+            executionRecorder.record(
+                result = buildSyntheticCronRunResult(
+                    taskId = executableTask.definitionRecord.taskId,
+                    nowMs = nowMs,
+                    errorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
+                    message = error.message ?: "Cron task ${executableTask.definitionRecord.taskId} failed with an execution exception.",
+                    artifactsJson = buildExecutionExceptionArtifactJson(executableTask.task),
+                ),
+            )
             taskRepository.upsertScheduleState(
                 executableTask.scheduleState.copy(
                     nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
@@ -202,8 +200,19 @@ class TaskSchedulerService(
                     lastScheduleStatus = ScheduleStatus.BLOCKED,
                 ),
             )
-            false
+            return false
         }
+
+        val persistedExecution = executionRecorder.record(result = execution)
+        taskRepository.upsertScheduleState(
+            executableTask.scheduleState.copy(
+                nextTriggerAt = cronScheduleCalculator.nextTriggerAt(trigger.expression, trigger.timezone, nowMs),
+                standbyEnabled = executableTask.definitionRecord.enabled,
+                lastTriggerAt = nowMs,
+                lastScheduleStatus = if (persistedExecution.taskRun.status == TaskRunStatus.BLOCKED) ScheduleStatus.BLOCKED else ScheduleStatus.SCHEDULED,
+            ),
+        )
+        return true
     }
 
     private suspend fun executeContinuousTask(
@@ -528,6 +537,34 @@ class TaskSchedulerService(
             finishedAt = nowMs,
             durationMs = 0L,
             triggerType = RunTriggerType.CONTINUOUS,
+            errorCode = errorCode,
+            message = message,
+            artifactsJson = artifactsJson,
+        ),
+        stepRuns = emptyList(),
+        taskAttemptCount = 0,
+    )
+
+    private fun buildSyntheticCronRunResult(
+        taskId: String,
+        nowMs: Long,
+        errorCode: String,
+        message: String,
+        artifactsJson: String,
+    ): TaskExecutionResult = TaskExecutionResult(
+        taskRun = TaskRunRecord(
+            runId = runIdFactory(),
+            sessionId = null,
+            cycleNo = null,
+            taskId = taskId,
+            credentialSetId = null,
+            credentialProfileId = null,
+            credentialAlias = null,
+            status = TaskRunStatus.BLOCKED,
+            startedAt = nowMs,
+            finishedAt = nowMs,
+            durationMs = 0L,
+            triggerType = RunTriggerType.CRON,
             errorCode = errorCode,
             message = message,
             artifactsJson = artifactsJson,
