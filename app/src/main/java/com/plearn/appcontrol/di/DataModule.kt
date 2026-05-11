@@ -29,6 +29,8 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object DataModule {
+    internal var diagnosticsRetentionStartupCleanerOverride: DiagnosticsRetentionStartupCleaner? = null
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppControlDatabase =
@@ -92,9 +94,10 @@ object DataModule {
     @Singleton
     fun provideDiagnosticsRetentionStartupCleaner(
         roomRunRecordRepository: RoomRunRecordRepository,
-    ): DiagnosticsRetentionStartupCleaner = DiagnosticsRetentionStartupCleaner(
-        cleanup = { roomRunRecordRepository.pruneRetainedRunsAtStartup() },
-    )
+    ): DiagnosticsRetentionStartupCleaner = diagnosticsRetentionStartupCleanerOverride
+        ?: DiagnosticsRetentionStartupCleaner(
+            cleanup = { roomRunRecordRepository.pruneRetainedRunsAtStartup() },
+        )
 
     private const val DATABASE_NAME = "appcontrol.db"
 }

@@ -25,6 +25,8 @@ import com.plearn.appcontrol.platform.devicecontrol.RootDeviceControlPort
 import com.plearn.appcontrol.platform.devicecontrol.RootShellPort
 import com.plearn.appcontrol.platform.devicecontrol.SuRootShellPort
 import com.plearn.appcontrol.runner.DefaultTaskRunner
+import com.plearn.appcontrol.runner.AllowAllDiagnosticsArtifactCaptureGate
+import com.plearn.appcontrol.runner.DiagnosticsArtifactCaptureGate
 import com.plearn.appcontrol.runner.RunnerTimeSource
 import com.plearn.appcontrol.runner.SystemRunnerTimeSource
 import com.plearn.appcontrol.runner.TaskRunner
@@ -76,12 +78,18 @@ object CapabilityModule {
 
     @Provides
     @Singleton
+    fun provideDiagnosticsArtifactCaptureGate(): DiagnosticsArtifactCaptureGate = AllowAllDiagnosticsArtifactCaptureGate
+
+    @Provides
+    @Singleton
     fun provideTaskRunner(
         capabilityFacade: CapabilityFacade,
         timeSource: RunnerTimeSource,
+        diagnosticsArtifactCaptureGate: DiagnosticsArtifactCaptureGate,
     ): TaskRunner = DefaultTaskRunner(
         capabilityFacade = capabilityFacade,
         timeSource = timeSource,
+        diagnosticsArtifactCaptureGate = diagnosticsArtifactCaptureGate,
     )
 
     @Provides

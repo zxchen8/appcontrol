@@ -321,6 +321,32 @@ class TaskMonitoringDetailServiceTest {
     }
 
     @Test
+    fun shouldFormatStorageLimitReachedRunArtifactReason() = runBlocking {
+        val runWithArtifact = newerRun.copy(
+            runId = "run-storage-limit",
+            status = "timed_out",
+            errorCode = "STEP_TIMEOUT",
+            message = "task timed out before screenshot capture",
+            artifactsJson = "{\"artifactType\":\"screenshot_skipped\",\"reason\":\"DIAG_ARTIFACT_STORAGE_LIMIT_REACHED\",\"captureRequested\":true,\"sensitiveContextActive\":false}",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(runWithArtifact)),
+                stepRunsByRunId = mapOf("run-storage-limit" to emptyList()),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-storage-limit", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("run=截图已跳过 | 原因=诊断产物存储预算已达上限，跳过截图采集 (DIAG_ARTIFACT_STORAGE_LIMIT_REACHED) | 请求截图=true | 敏感上下文=false"),
+            snapshot?.failureContext?.runArtifacts,
+        )
+    }
+
+    @Test
     fun shouldNotTreatBlockedRunWithRecordedStepsAsPreActionBlock() = runBlocking {
         val blockedRun = newerRun.copy(
             runId = "run-blocked-with-steps",

@@ -358,6 +358,33 @@ class DefaultTaskRunnerTest {
     }
 
     @Test
+    fun shouldRecordStorageLimitArtifactWhenStepFailureCaptureGateDenies() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "login button missing",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            diagnosticsArtifactCaptureGate = denyAllDiagnosticsArtifactCaptureGate,
+            runIdFactory = { "run-006b" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                steps = listOf(tapElementStep()),
+            ),
+        )
+
+        assertEquals(
+            "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED",
+            result.stepRuns.single().artifactReason(),
+        )
+    }
+
+    @Test
     fun shouldSuppressScreenshotArtifactWhenFailureOccursAfterSensitiveInput() = runBlocking {
         val facade = RecordingCapabilityFacade().apply {
             tapResults += CapabilityResult.Failure(
@@ -425,6 +452,39 @@ class DefaultTaskRunnerTest {
             result.stepRuns.single().artifactReason(),
         )
         assertEquals(true, result.stepRuns.single().artifactSensitiveContextActive())
+    }
+
+    @Test
+    fun shouldPreferSensitiveSuppressionOverStorageLimitGate() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            inputResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_EXECUTION_FAILED,
+                message = "keyboard dismissed",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            diagnosticsArtifactCaptureGate = denyAllDiagnosticsArtifactCaptureGate,
+            runIdFactory = { "run-008b" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                variables = buildJsonObject {
+                    putJsonObject("secretPhone") {
+                        put("value", "13800138000")
+                        put("sensitive", true)
+                    }
+                },
+                steps = listOf(inputTextVariableRefStep("secretPhone")),
+            ),
+        )
+
+        assertEquals(
+            "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT",
+            result.stepRuns.single().artifactReason(),
+        )
     }
 
     @Test
@@ -500,6 +560,33 @@ class DefaultTaskRunnerTest {
             result.stepRuns.last().artifactReason(),
         )
         assertEquals(false, result.stepRuns.last().artifactSensitiveContextActive())
+    }
+
+    @Test
+    fun shouldRecordRunLevelStorageLimitArtifactWhenTaskTimesOutBeforeStepResultIsPersistedAndGateDenies() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            waitDelayMs = 50
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            diagnosticsArtifactCaptureGate = denyAllDiagnosticsArtifactCaptureGate,
+            runIdFactory = { "run-010b" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                executionPolicy = defaultExecutionPolicy(taskTimeoutMs = 10),
+                steps = listOf(waitElementStep(timeoutMs = 5_000)),
+            ),
+        )
+
+        assertEquals(TaskRunStatus.TIMED_OUT, result.taskRun.status)
+        assertEquals(emptyList<StepRunRecord>(), result.stepRuns)
+        assertEquals(
+            "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED",
+            result.taskRun.artifactReason(),
+        )
     }
 
     private fun sampleTask(
@@ -713,6 +800,8 @@ class DefaultTaskRunnerTest {
             currentTimeMs += durationMs
         }
     }
+
+    private val denyAllDiagnosticsArtifactCaptureGate = DiagnosticsArtifactCaptureGate { false }
 
     private fun StepRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)
         .jsonObject["reason"]

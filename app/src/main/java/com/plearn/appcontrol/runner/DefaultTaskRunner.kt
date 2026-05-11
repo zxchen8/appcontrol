@@ -33,6 +33,7 @@ import java.util.UUID
 class DefaultTaskRunner(
     private val capabilityFacade: CapabilityFacade,
     private val timeSource: RunnerTimeSource = SystemRunnerTimeSource,
+    private val diagnosticsArtifactCaptureGate: DiagnosticsArtifactCaptureGate = AllowAllDiagnosticsArtifactCaptureGate,
     private val runIdFactory: () -> String = { UUID.randomUUID().toString() },
 ) : TaskRunner {
     override suspend fun run(task: TaskDefinition, triggerType: String): TaskExecutionResult {
@@ -475,6 +476,13 @@ class DefaultTaskRunner(
                 sensitiveContextActive = true,
             )
 
+            !diagnosticsArtifactCaptureGate.canCaptureFailureArtifact() -> DiagnosticArtifact(
+                artifactType = "screenshot_skipped",
+                reason = RunnerDiagnosticArtifactReason.ARTIFACT_STORAGE_LIMIT_REACHED,
+                captureRequested = true,
+                sensitiveContextActive = false,
+            )
+
             else -> DiagnosticArtifact(
                 artifactType = "screenshot_unavailable",
                 reason = RunnerDiagnosticArtifactReason.SCREENSHOT_CAPTURE_NOT_IMPLEMENTED,
@@ -624,6 +632,7 @@ class DefaultTaskRunner(
     private object RunnerDiagnosticArtifactReason {
         const val SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT = "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT"
         const val SCREENSHOT_CAPTURE_DISABLED_BY_POLICY = "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY"
+        const val ARTIFACT_STORAGE_LIMIT_REACHED = "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED"
         const val SCREENSHOT_CAPTURE_NOT_IMPLEMENTED = "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED"
     }
 
