@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class ManualTaskExecutionServiceTest {
@@ -151,7 +152,144 @@ class ManualTaskExecutionServiceTest {
         assertEquals(result.taskRun.runId, recorder.lastResult?.taskRun?.runId)
     }
 
-    private class RecordingTaskRunner : TaskRunner {
+    @Test
+    fun shouldRecordFailedManualRunWhenRunnerThrowsException() = runBlocking {
+        val runner = RecordingTaskRunner(shouldThrow = true)
+        val recorder = RecordingTaskExecutionRecorder()
+        val service = ManualTaskExecutionService(
+            parser = TaskDslParser(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedRunnerTimeSource(),
+            runIdFactory = { "manual-execution-exception" },
+        )
+
+        val result = service.run(
+            TaskDefinitionRecord(
+                taskId = "smoke-login",
+                name = "Smoke Login",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = validTaskJson,
+                updatedAt = 200L,
+            ),
+        )
+
+        assertEquals(1, runner.invocationCount)
+    assertEquals(TaskRunStatus.FAILED, result.taskRun.status)
+        assertEquals(RunnerFailureCode.RUNNER_EXECUTION_EXCEPTION, result.taskRun.errorCode)
+        assertEquals("screenshot_unavailable", result.taskRun.artifactType())
+        assertEquals("DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION", result.taskRun.artifactReason())
+        assertEquals(null, result.taskRun.artifactRelativePath())
+        assertEquals(1, recorder.recordCount)
+        assertEquals(result.taskRun.runId, recorder.lastResult?.taskRun?.runId)
+        assertEquals(
+            "Manual execution for smoke-login failed with an execution exception.",
+            result.taskRun.message,
+        )
+    }
+
+    @Test
+    fun shouldSkipManualExecutionExceptionScreenshotWhenDiagnosticsDisableCapture() = runBlocking {
+        val runner = RecordingTaskRunner(shouldThrow = true)
+        val recorder = RecordingTaskExecutionRecorder()
+        val service = ManualTaskExecutionService(
+            parser = TaskDslParser(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedRunnerTimeSource(),
+            runIdFactory = { "manual-diagnostics-disabled" },
+        )
+
+        val result = service.run(
+            TaskDefinitionRecord(
+                taskId = "smoke-login",
+                name = "Smoke Login",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = validTaskJsonWithFailureScreenshotDisabled,
+                updatedAt = 200L,
+            ),
+        )
+
+        assertEquals(TaskRunStatus.FAILED, result.taskRun.status)
+        assertEquals("screenshot_skipped", result.taskRun.artifactType())
+        assertEquals("DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY", result.taskRun.artifactReason())
+        assertEquals(null, result.taskRun.artifactRelativePath())
+    }
+
+    @Test
+    fun shouldPropagateRecorderFailureAfterRunnerCompletesWithoutSynthesizingFallback() = runBlocking {
+        val runner = RecordingTaskRunner()
+        val recorder = RecordingTaskExecutionRecorder(failureOnRecordCount = 1)
+        val service = ManualTaskExecutionService(
+            parser = TaskDslParser(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedRunnerTimeSource(),
+            runIdFactory = { "manual-recorder-failure" },
+        )
+
+        try {
+            service.run(
+                TaskDefinitionRecord(
+                    taskId = "smoke-login",
+                    name = "Smoke Login",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = validTaskJson,
+                    updatedAt = 200L,
+                ),
+            )
+            fail("Expected recorder failure to be propagated.")
+        } catch (error: IllegalStateException) {
+            assertEquals("recorder failure", error.message)
+        }
+
+        assertEquals(1, runner.invocationCount)
+    }
+
+    @Test
+    fun shouldRetainRunnerExceptionAsSuppressedWhenSyntheticRecordFails() = runBlocking {
+        val runner = RecordingTaskRunner(shouldThrow = true)
+        val recorder = RecordingTaskExecutionRecorder(failureOnRecordCount = 1)
+        val service = ManualTaskExecutionService(
+            parser = TaskDslParser(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            timeSource = FixedRunnerTimeSource(),
+            runIdFactory = { "manual-synthetic-recorder-failure" },
+        )
+
+        try {
+            service.run(
+                TaskDefinitionRecord(
+                    taskId = "smoke-login",
+                    name = "Smoke Login",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = validTaskJson,
+                    updatedAt = 200L,
+                ),
+            )
+            fail("Expected recorder failure to be propagated.")
+        } catch (error: IllegalStateException) {
+            assertEquals("recorder failure", error.message)
+            assertEquals(1, error.suppressed.size)
+            assertEquals("runner execution failed", error.suppressed.single().message)
+        }
+
+        assertEquals(1, runner.invocationCount)
+        assertEquals(1, recorder.recordCount)
+    }
+
+    private class RecordingTaskRunner(
+        private val shouldThrow: Boolean = false,
+    ) : TaskRunner {
         var invocationCount: Int = 0
         var lastTask: TaskDefinition? = null
         var lastTriggerType: String? = null
@@ -160,6 +298,9 @@ class ManualTaskExecutionServiceTest {
             invocationCount += 1
             lastTask = task
             lastTriggerType = triggerType
+            if (shouldThrow) {
+                throw IllegalStateException("runner execution failed")
+            }
             return TaskExecutionResult(
                 taskRun = TaskRunRecord(
                     runId = "run-123",
@@ -201,7 +342,9 @@ class ManualTaskExecutionServiceTest {
         override suspend fun delay(durationMs: Long) = Unit
     }
 
-    private class RecordingTaskExecutionRecorder : TaskExecutionRecorder {
+    private class RecordingTaskExecutionRecorder(
+        private val failureOnRecordCount: Int? = null,
+    ) : TaskExecutionRecorder {
         var recordCount: Int = 0
         var lastResult: TaskExecutionResult? = null
 
@@ -212,6 +355,9 @@ class ManualTaskExecutionServiceTest {
         ): TaskExecutionResult {
             recordCount += 1
             lastResult = result
+            if (failureOnRecordCount == recordCount) {
+                throw IllegalStateException("recorder failure")
+            }
             return result
         }
     }
@@ -252,10 +398,25 @@ class ManualTaskExecutionServiceTest {
               ]
             }
         """.trimIndent()
+
+        val validTaskJsonWithFailureScreenshotDisabled = validTaskJson.replace(
+            "\"steps\": [",
+            "\"diagnostics\": {\n                \"captureScreenshotOnFailure\": false,\n                \"captureScreenshotOnStepFailure\": true,\n                \"logLevel\": \"info\"\n              },\n              \"steps\": [",
+        )
     }
 
     private fun TaskRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)
         .jsonObject["reason"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun TaskRunRecord.artifactType(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["artifactType"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun TaskRunRecord.artifactRelativePath(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["relativePath"]
         ?.jsonPrimitive
         ?.content
 }
