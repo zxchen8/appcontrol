@@ -1291,6 +1291,72 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun roomRunRecordRepositoryShouldProtectCurrentRunScreenshotsWhenPerTaskCapIsZero() = runBlocking {
+        val screenshotRootDir = Files.createTempDirectory("diag-shot-current-protect").toFile()
+        try {
+            val repository = RoomRunRecordRepository(
+                database,
+                database.taskRunDao(),
+                database.stepRunDao(),
+                diagnosticsArtifactFileStore = FileBackedDiagnosticsArtifactFileStore(screenshotRootDir) { 1_000L },
+                retentionPolicy = DiagnosticsRetentionPolicy(
+                    maxRunsPerTask = 10,
+                    maxScreenshotArtifactsPerTask = 0,
+                    maxAgeMs = 10_000L,
+                    maxStorageBytes = 10_000L,
+                    captureHighWatermarkBytes = 9_000L,
+                ),
+                nowMsProvider = { 1_000L },
+            )
+            taskRepository.upsertTaskDefinition(
+                TaskDefinitionRecord(
+                    taskId = "task-run-a",
+                    name = "任务运行A",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = "{\"taskId\":\"task-run-a\"}",
+                    updatedAt = 100,
+                ),
+            )
+            repository.upsertTaskRun(
+                TaskRunRecord(
+                    runId = "run-old-active",
+                    sessionId = null,
+                    cycleNo = null,
+                    taskId = "task-run-a",
+                    credentialSetId = null,
+                    credentialProfileId = null,
+                    credentialAlias = null,
+                    status = "failed",
+                    startedAt = 900,
+                    finishedAt = 950,
+                    durationMs = 50,
+                    triggerType = "manual",
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = null,
+                ),
+            )
+            val oldScreenshotFile = screenshotRootDir.resolve("task-run-a/run-old-active/run.png").apply {
+                parentFile?.mkdirs()
+                writeBytes(ByteArray(32) { 1 })
+                setLastModified(900L)
+            }
+            val currentScreenshotFile = screenshotRootDir.resolve("task-run-a/run-current/step-current.png").apply {
+                parentFile?.mkdirs()
+                writeBytes(ByteArray(32) { 2 })
+                setLastModified(800L)
+            }
+
+            assertTrue(repository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-current"))
+            assertFalse(oldScreenshotFile.exists())
+            assertTrue(currentScreenshotFile.exists())
+        } finally {
+            screenshotRootDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun roomRunRecordRepositoryShouldPruneDiagnosticsEventsBeyondPerTaskLimit() = runBlocking {
         val startupRepository = RoomRunRecordRepository(
             database,
