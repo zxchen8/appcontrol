@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.plearn.appcontrol.appservice.AppDashboardService
 import com.plearn.appcontrol.appservice.AppDashboardSnapshot
@@ -625,7 +626,9 @@ private fun TaskManagementCard(
             OutlinedTextField(
                 value = taskEditorJson,
                 onValueChange = onTaskEditorJsonChange,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("task-editor-json"),
                 label = { Text("任务 JSON") },
                 minLines = 12,
                 enabled = !actionInFlight,
@@ -1008,7 +1011,9 @@ private fun TaskDashboardRow(
     onRunTaskNow: (TaskDashboardItem) -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("task-row-${task.taskId}"),
         colors = CardDefaults.cardColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         ),

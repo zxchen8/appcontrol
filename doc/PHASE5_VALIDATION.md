@@ -44,11 +44,12 @@
 - App 可以启动到主界面
 - 顶部摘要卡片可见
 - 任务导入入口、环境检查入口、点击链路 smoke 验证入口可滚动到并显示
+- `AppControlAppSmokeTest` 会验证任务编辑器中的样例 JSON 经唯一 taskId/name 改写后可被导入，且导入结果会刷新到读侧任务视图
 - `DeviceValidationUiSmokeTest` 会在独立的 deterministic UI harness 中验证点击“检查环境”后，环境卡片能刷新出 `Root`、`Accessibility enabled`、`Accessibility connected`、`Foreground package` 四行结果
 
 ### 3.3 模拟器预检步骤
 
-适用目标：在 Android 9/10 模拟器上先验证 UI 启动、入口可见性与设备验证入口的文本刷新护栏，不替代 rooted 真机验收。
+适用目标：在 Android 9/10 模拟器上先验证 UI 启动、任务导入写读侧链路、入口可见性与设备验证入口的文本刷新护栏，不替代 rooted 真机验收。
 
 模拟器预检前置条件：
 
@@ -70,7 +71,7 @@ adb -s <device-id> root
 1. 确认设备已连接，且 Android 版本为 9 或 10。
 2. 确认 `sys.boot_completed` 返回 `1`，避免在系统未完全启动时触发 UI 用例。
 3. 若镜像支持，执行 `adb root`，用于尽早暴露 root shell 差异。
-4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面和入口可见。
+4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面、任务导入写读侧链路和入口可见性正常。
 5. 检查 `DeviceValidationUiSmokeTest` 已通过，证明设备验证入口中的“检查环境”按钮能驱动环境文本刷新护栏。
 
 已验证基线：
@@ -85,7 +86,7 @@ adb -s <device-id> root
 
 ### 3.4 Rooted 真机后续验证
 
-模拟器预检只覆盖 UI 启动、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
+模拟器预检只覆盖 UI 启动、任务导入写读侧链路、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
 
 - 无障碍服务启用与连接闭环
 - 手动真实执行与步骤诊断产物落库
@@ -110,9 +111,9 @@ adb -s <device-id> root
 
 | 场景 | 步骤 | 预期 | 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，且 deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-11 | connectedDebugAndroidTest on emulator-5554 |
-| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面与入口文案显示 | Pending | Pending |
-| 环境检查 | 点击“检查环境” | Root/Accessibility/Foreground package 正确显示 | Pending | Pending |
+| 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，唯一任务导入会刷新到读侧任务视图，且 deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-11 | connectedDebugAndroidTest on emulator-5554 |
+| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面、入口文案以及唯一任务导入后的读侧刷新正常 | Passed on 2026-05-11 | connectedDebugAndroidTest on emulator-5554 |
+| 环境检查（rooted 真机） | 点击“检查环境” | Root/Accessibility/Foreground package 的真实设备状态正确显示 | Pending | Pending |
 | 手动真实执行 | 从任务列表触发手动运行 | 生成 taskRun、stepRun 与诊断证据 | Pending | Pending |
 | cron 调度 | 启用 cron 任务并等待触发 | 调度待命状态正确，任务按 cron 触发 | Pending | Pending |
 | continuous 轮转 | 启用 continuous 任务并观察多轮 | 轮次推进、账号切换和会话记录一致 | Pending | Pending |
