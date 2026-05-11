@@ -1,5 +1,15 @@
 package com.plearn.appcontrol.scheduler
 
+import com.plearn.appcontrol.capability.CapabilityFacade
+import com.plearn.appcontrol.capability.CapabilityResult
+import com.plearn.appcontrol.capability.ElementSelector
+import com.plearn.appcontrol.capability.InputTextRequest
+import com.plearn.appcontrol.capability.InputTextSummary
+import com.plearn.appcontrol.capability.ScreenshotCapture
+import com.plearn.appcontrol.capability.ScreenshotCaptureRequest
+import com.plearn.appcontrol.capability.SwipeRequest
+import com.plearn.appcontrol.capability.TapTarget
+import com.plearn.appcontrol.capability.WaitElementState
 import com.plearn.appcontrol.data.model.ContinuousSessionRecord
 import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.CredentialSetItemRecord
@@ -13,6 +23,7 @@ import com.plearn.appcontrol.data.repository.RunRecordRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
 import com.plearn.appcontrol.data.repository.TaskRepository
 import com.plearn.appcontrol.dsl.TaskDslParser
+import com.plearn.appcontrol.runner.DiagnosticsArtifactCaptureGate
 import com.plearn.appcontrol.runner.RunTriggerType
 import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.TaskExecutionResult
@@ -108,6 +119,8 @@ class TaskSchedulerServiceTest {
             failureTaskIds = setOf("cron-task"),
         )
         val recorder = RecordingTaskExecutionRecorder()
+        val capabilityFacade = RecordingCapabilityFacade()
+        val diagnosticsArtifactCaptureGate = RecordingDiagnosticsArtifactCaptureGate(allowed = true)
         val scheduler = TaskSchedulerService(
             parser = TaskDslParser(),
             taskRepository = taskRepository,
@@ -115,9 +128,12 @@ class TaskSchedulerServiceTest {
             sessionRepository = FakeSessionRepository(),
             taskRunner = runner,
             executionRecorder = recorder,
+            capabilityFacade = capabilityFacade,
+            diagnosticsArtifactCaptureGate = diagnosticsArtifactCaptureGate,
             timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
             cronScheduleCalculator = CronScheduleCalculator(),
             sessionIdFactory = { "session-ignored" },
+            runIdFactory = { "cron-run-exception" },
         )
 
         val result = scheduler.dispatchDueTasks()
@@ -127,13 +143,160 @@ class TaskSchedulerServiceTest {
         assertEquals(1, recorder.recordCount)
         assertEquals(TaskRunStatus.BLOCKED, recorder.lastResult?.taskRun?.status)
         assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, recorder.lastResult?.taskRun?.errorCode)
+        assertEquals("screenshot", recorder.lastResult?.taskRun?.artifactType())
         assertEquals(
-            "DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION",
+            null,
             recorder.lastResult?.taskRun?.artifactReason(),
         )
+        assertEquals("cron-task/cron-run-exception/run.png", recorder.lastResult?.taskRun?.artifactRelativePath())
+        assertEquals(
+            listOf(
+                ScreenshotCaptureRequest(
+                    taskId = "cron-task",
+                    runId = "cron-run-exception",
+                    stepId = null,
+                    attempt = null,
+                    taskAttempt = null,
+                ),
+            ),
+            capabilityFacade.screenshotRequests,
+        )
+        assertEquals(listOf("cron-task" to "cron-run-exception"), diagnosticsArtifactCaptureGate.invocations)
         assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("cron-task").lastScheduleStatus)
         assertEquals(1_000L, taskRepository.scheduleStates.getValue("cron-task").lastTriggerAt)
         assertTrue(taskRepository.scheduleStates.getValue("cron-task").nextTriggerAt!! > 1_000L)
+    }
+
+    @Test
+    fun shouldSkipCronExecutionExceptionScreenshotWhenArtifactGateRejectsCapture() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(
+            status = TaskRunStatus.SUCCESS,
+            failureTaskIds = setOf("cron-task"),
+        )
+        val recorder = RecordingTaskExecutionRecorder()
+        val capabilityFacade = RecordingCapabilityFacade()
+        val diagnosticsArtifactCaptureGate = RecordingDiagnosticsArtifactCaptureGate(allowed = false)
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            capabilityFacade = capabilityFacade,
+            diagnosticsArtifactCaptureGate = diagnosticsArtifactCaptureGate,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+            runIdFactory = { "cron-run-gate-reject" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertEquals(1, recorder.recordCount)
+        assertEquals(TaskRunStatus.BLOCKED, recorder.lastResult?.taskRun?.status)
+        assertEquals("screenshot_skipped", recorder.lastResult?.taskRun?.artifactType())
+        assertEquals("DIAG_ARTIFACT_STORAGE_LIMIT_REACHED", recorder.lastResult?.taskRun?.artifactReason())
+        assertEquals(null, recorder.lastResult?.taskRun?.artifactRelativePath())
+        assertTrue(capabilityFacade.screenshotRequests.isEmpty())
+        assertEquals(listOf("cron-task" to "cron-run-gate-reject"), diagnosticsArtifactCaptureGate.invocations)
+    }
+
+    @Test
+    fun shouldMarkCronExecutionExceptionScreenshotUnavailableWhenCaptureFails() = runBlocking {
+        val taskRepository = FakeTaskRepository(
+            definitions = mutableListOf(
+                TaskDefinitionRecord(
+                    taskId = "cron-task",
+                    name = "Cron Task",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = cronTaskJson,
+                    updatedAt = 1L,
+                ),
+            ),
+            scheduleStates = mutableMapOf(
+                "cron-task" to TaskScheduleStateRecord(
+                    taskId = "cron-task",
+                    nextTriggerAt = 1_000L,
+                    standbyEnabled = true,
+                    lastTriggerAt = null,
+                    lastScheduleStatus = ScheduleStatus.SCHEDULED,
+                ),
+            ),
+        )
+        val runner = RecordingTaskRunner(
+            status = TaskRunStatus.SUCCESS,
+            failureTaskIds = setOf("cron-task"),
+        )
+        val recorder = RecordingTaskExecutionRecorder()
+        val capabilityFacade = RecordingCapabilityFacade(
+            screenshotResult = CapabilityResult.Failure(
+                errorCode = "STEP_EXECUTION_FAILED",
+                message = "capture failed",
+            ),
+        )
+        val diagnosticsArtifactCaptureGate = RecordingDiagnosticsArtifactCaptureGate(allowed = true)
+        val scheduler = TaskSchedulerService(
+            parser = TaskDslParser(),
+            taskRepository = taskRepository,
+            credentialRepository = FakeCredentialRepository(),
+            sessionRepository = FakeSessionRepository(),
+            taskRunner = runner,
+            executionRecorder = recorder,
+            capabilityFacade = capabilityFacade,
+            diagnosticsArtifactCaptureGate = diagnosticsArtifactCaptureGate,
+            timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
+            cronScheduleCalculator = CronScheduleCalculator(),
+            sessionIdFactory = { "session-ignored" },
+            runIdFactory = { "cron-run-capture-failed" },
+        )
+
+        val result = scheduler.dispatchDueTasks()
+
+        assertTrue(result.executedTaskIds.isEmpty())
+        assertEquals(1, recorder.recordCount)
+        assertEquals(TaskRunStatus.BLOCKED, recorder.lastResult?.taskRun?.status)
+        assertEquals("screenshot_unavailable", recorder.lastResult?.taskRun?.artifactType())
+        assertEquals("DIAG_SCREENSHOT_CAPTURE_FAILED", recorder.lastResult?.taskRun?.artifactReason())
+        assertEquals(null, recorder.lastResult?.taskRun?.artifactRelativePath())
+        assertEquals(
+            listOf(
+                ScreenshotCaptureRequest(
+                    taskId = "cron-task",
+                    runId = "cron-run-capture-failed",
+                    stepId = null,
+                    attempt = null,
+                    taskAttempt = null,
+                ),
+            ),
+            capabilityFacade.screenshotRequests,
+        )
+        assertEquals(listOf("cron-task" to "cron-run-capture-failed"), diagnosticsArtifactCaptureGate.invocations)
     }
 
     @Test
@@ -721,6 +884,8 @@ class TaskSchedulerServiceTest {
             failureTaskIds = setOf("continuous-task-a"),
         )
         val recorder = RecordingTaskExecutionRecorder()
+        val capabilityFacade = RecordingCapabilityFacade()
+        val diagnosticsArtifactCaptureGate = RecordingDiagnosticsArtifactCaptureGate(allowed = true)
         val scheduler = TaskSchedulerService(
             parser = TaskDslParser(),
             taskRepository = taskRepository,
@@ -728,9 +893,12 @@ class TaskSchedulerServiceTest {
             sessionRepository = sessionRepository,
             taskRunner = runner,
             executionRecorder = recorder,
+            capabilityFacade = capabilityFacade,
+            diagnosticsArtifactCaptureGate = diagnosticsArtifactCaptureGate,
             timeSource = FixedSchedulerTimeSource(nowMs = 1_000L),
             cronScheduleCalculator = CronScheduleCalculator(),
             sessionIdFactory = { "session-generated" },
+            runIdFactory = { "continuous-run-exception" },
         )
 
         val result = scheduler.dispatchDueTasks()
@@ -741,10 +909,25 @@ class TaskSchedulerServiceTest {
         val blockedResult = recorder.recordedResults.first { it.taskRun.taskId == "continuous-task-a" }
         assertEquals(TaskRunStatus.BLOCKED, blockedResult.taskRun.status)
         assertEquals(SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION, blockedResult.taskRun.errorCode)
+        assertEquals("screenshot", blockedResult.taskRun.artifactType())
         assertEquals(
-            "DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION",
+            null,
             blockedResult.taskRun.artifactReason(),
         )
+        assertEquals("continuous-task-a/continuous-run-exception/run.png", blockedResult.taskRun.artifactRelativePath())
+        assertEquals(
+            listOf(
+                ScreenshotCaptureRequest(
+                    taskId = "continuous-task-a",
+                    runId = "continuous-run-exception",
+                    stepId = null,
+                    attempt = null,
+                    taskAttempt = null,
+                ),
+            ),
+            capabilityFacade.screenshotRequests,
+        )
+        assertEquals(listOf("continuous-task-a" to "continuous-run-exception"), diagnosticsArtifactCaptureGate.invocations)
         assertEquals(ScheduleStatus.BLOCKED, taskRepository.scheduleStates.getValue("continuous-task-a").lastScheduleStatus)
         assertEquals(1, sessionRepository.terminalUpdates.size)
         val terminalUpdate = sessionRepository.terminalUpdates.single()
@@ -1601,6 +1784,62 @@ class TaskSchedulerServiceTest {
         .jsonObject["reason"]
         ?.jsonPrimitive
         ?.content
+
+    private fun TaskRunRecord.artifactType(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["artifactType"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun TaskRunRecord.artifactRelativePath(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["relativePath"]
+        ?.jsonPrimitive
+        ?.content
+
+    private class RecordingDiagnosticsArtifactCaptureGate(
+        private val allowed: Boolean,
+    ) : DiagnosticsArtifactCaptureGate {
+        val invocations = mutableListOf<Pair<String?, String?>>()
+
+        override suspend fun canCaptureFailureArtifact(taskId: String?, runId: String?): Boolean {
+            invocations += taskId to runId
+            return allowed
+        }
+    }
+
+    private class RecordingCapabilityFacade(
+        private val screenshotResult: CapabilityResult<ScreenshotCapture>? = null,
+    ) : CapabilityFacade {
+        val screenshotRequests = mutableListOf<ScreenshotCaptureRequest>()
+
+        override suspend fun startApp(packageName: String): CapabilityResult<Unit> = throw AssertionError("Unexpected capability call")
+
+        override suspend fun stopApp(packageName: String): CapabilityResult<Unit> = throw AssertionError("Unexpected capability call")
+
+        override suspend fun restartApp(packageName: String, waitAfterStopMs: Long): CapabilityResult<Unit> = throw AssertionError("Unexpected capability call")
+
+        override suspend fun tap(target: TapTarget): CapabilityResult<Unit> = throw AssertionError("Unexpected capability call")
+
+        override suspend fun swipe(request: SwipeRequest): CapabilityResult<Unit> = throw AssertionError("Unexpected capability call")
+
+        override suspend fun inputText(request: InputTextRequest): CapabilityResult<InputTextSummary> = throw AssertionError("Unexpected capability call")
+
+        override suspend fun captureScreenshot(request: ScreenshotCaptureRequest): CapabilityResult<ScreenshotCapture> {
+            screenshotRequests += request
+            return screenshotResult ?: CapabilityResult.Success(
+                ScreenshotCapture(
+                    relativePath = "${request.taskId}/${request.runId}/run.png",
+                    mimeType = "image/png",
+                    fileSizeBytes = 128L,
+                ),
+            )
+        }
+
+        override suspend fun waitForElement(
+            selector: ElementSelector,
+            state: WaitElementState,
+            timeoutMs: Long,
+        ): CapabilityResult<Unit> = throw AssertionError("Unexpected capability call")
+    }
 
     private class FakeTaskExecutionLock(
         private val lockedPackages: MutableSet<String> = mutableSetOf(),

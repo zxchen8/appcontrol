@@ -6,11 +6,13 @@ import com.plearn.appcontrol.appservice.ManualTaskExecutionService
 import com.plearn.appcontrol.appservice.SchedulerStandbyController
 import com.plearn.appcontrol.appservice.SchedulerRecoveryAlarmScheduler
 import com.plearn.appcontrol.appservice.SchedulerRecoveryOrchestrator
+import com.plearn.appcontrol.capability.CapabilityFacade
 import com.plearn.appcontrol.data.repository.CredentialRepository
 import com.plearn.appcontrol.data.repository.RunRecordRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
 import com.plearn.appcontrol.data.repository.TaskRepository
 import com.plearn.appcontrol.dsl.TaskDslParser
+import com.plearn.appcontrol.runner.DiagnosticsArtifactCaptureGate
 import com.plearn.appcontrol.runner.RepositoryBackedTaskExecutionRecorder
 import com.plearn.appcontrol.runner.RunnerTimeSource
 import com.plearn.appcontrol.runner.TaskExecutionRecorder
@@ -78,6 +80,8 @@ object ExecutionServicesModule {
         sessionRepository: SessionRepository,
         taskRunner: TaskRunner,
         executionRecorder: TaskExecutionRecorder,
+        capabilityFacade: CapabilityFacade,
+        diagnosticsArtifactCaptureGate: DiagnosticsArtifactCaptureGate,
         schedulerTimeSource: SchedulerTimeSource,
         cronScheduleCalculator: CronScheduleCalculator,
     ): TaskSchedulerService = TaskSchedulerService(
@@ -87,6 +91,8 @@ object ExecutionServicesModule {
         sessionRepository = sessionRepository,
         taskRunner = taskRunner,
         executionRecorder = executionRecorder,
+        capabilityFacade = capabilityFacade,
+        diagnosticsArtifactCaptureGate = diagnosticsArtifactCaptureGate,
         timeSource = schedulerTimeSource,
         cronScheduleCalculator = cronScheduleCalculator,
         sessionIdFactory = { UUID.randomUUID().toString() },

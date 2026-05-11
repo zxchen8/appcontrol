@@ -1,5 +1,8 @@
 package com.plearn.appcontrol.scheduler
 
+import com.plearn.appcontrol.capability.CapabilityFacade
+import com.plearn.appcontrol.capability.CapabilityResult
+import com.plearn.appcontrol.capability.ScreenshotCaptureRequest
 import com.plearn.appcontrol.data.model.ContinuousSessionRecord
 import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
@@ -13,6 +16,8 @@ import com.plearn.appcontrol.dsl.MissedSchedulePolicy
 import com.plearn.appcontrol.dsl.TaskDefinition
 import com.plearn.appcontrol.dsl.TaskDslParser
 import com.plearn.appcontrol.dsl.TaskTrigger
+import com.plearn.appcontrol.runner.AllowAllDiagnosticsArtifactCaptureGate
+import com.plearn.appcontrol.runner.DiagnosticsArtifactCaptureGate
 import com.plearn.appcontrol.runner.RunTriggerType
 import com.plearn.appcontrol.runner.TaskExecutionRecorder
 import com.plearn.appcontrol.runner.TaskExecutionResult
@@ -33,6 +38,8 @@ class TaskSchedulerService(
     private val sessionRepository: SessionRepository,
     private val taskRunner: TaskRunner,
     private val executionRecorder: TaskExecutionRecorder,
+    private val capabilityFacade: CapabilityFacade? = null,
+    private val diagnosticsArtifactCaptureGate: DiagnosticsArtifactCaptureGate = AllowAllDiagnosticsArtifactCaptureGate,
     private val timeSource: SchedulerTimeSource = SystemSchedulerTimeSource,
     private val cronScheduleCalculator: CronScheduleCalculator = CronScheduleCalculator(),
     private val executionLock: TaskExecutionLock = InMemoryTaskExecutionLock(),
@@ -183,13 +190,19 @@ class TaskSchedulerService(
             if (error is CancellationException) {
                 throw error
             }
+            val syntheticRunId = runIdFactory()
             executionRecorder.record(
                 result = buildSyntheticCronRunResult(
+                    runId = syntheticRunId,
                     taskId = executableTask.definitionRecord.taskId,
                     nowMs = nowMs,
                     errorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
                     message = error.message ?: "Cron task ${executableTask.definitionRecord.taskId} failed with an execution exception.",
-                    artifactsJson = buildExecutionExceptionArtifactJson(executableTask.task),
+                    artifactsJson = buildExecutionExceptionArtifactJson(
+                        task = executableTask.task,
+                        taskId = executableTask.definitionRecord.taskId,
+                        runId = syntheticRunId,
+                    ),
                 ),
             )
             taskRepository.upsertScheduleState(
@@ -428,8 +441,10 @@ class TaskSchedulerService(
                 throw error
             }
             if (sessionPersisted) {
+                val syntheticRunId = runIdFactory()
                 executionRecorder.record(
                     result = buildSyntheticContinuousRunResult(
+                        runId = syntheticRunId,
                         sessionId = activeSession.sessionId,
                         cycleNo = activeSession.totalCycles + 1,
                         taskId = executableTask.definitionRecord.taskId,
@@ -438,7 +453,11 @@ class TaskSchedulerService(
                         status = TaskRunStatus.BLOCKED,
                         errorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
                         message = error.message ?: "Continuous task ${executableTask.definitionRecord.taskId} failed with an execution exception.",
-                        artifactsJson = buildExecutionExceptionArtifactJson(executableTask.task),
+                        artifactsJson = buildExecutionExceptionArtifactJson(
+                            task = executableTask.task,
+                            taskId = executableTask.definitionRecord.taskId,
+                            runId = syntheticRunId,
+                        ),
                     ),
                     sessionId = activeSession.sessionId,
                     cycleNo = activeSession.totalCycles + 1,
@@ -514,6 +533,7 @@ class TaskSchedulerService(
     }
 
     private fun buildSyntheticContinuousRunResult(
+        runId: String = runIdFactory(),
         sessionId: String,
         cycleNo: Int,
         taskId: String,
@@ -525,7 +545,7 @@ class TaskSchedulerService(
         artifactsJson: String,
     ): TaskExecutionResult = TaskExecutionResult(
         taskRun = TaskRunRecord(
-            runId = runIdFactory(),
+            runId = runId,
             sessionId = sessionId,
             cycleNo = cycleNo,
             taskId = taskId,
@@ -546,6 +566,7 @@ class TaskSchedulerService(
     )
 
     private fun buildSyntheticCronRunResult(
+        runId: String = runIdFactory(),
         taskId: String,
         nowMs: Long,
         errorCode: String,
@@ -553,7 +574,7 @@ class TaskSchedulerService(
         artifactsJson: String,
     ): TaskExecutionResult = TaskExecutionResult(
         taskRun = TaskRunRecord(
-            runId = runIdFactory(),
+            runId = runId,
             sessionId = null,
             cycleNo = null,
             taskId = taskId,
@@ -573,31 +594,85 @@ class TaskSchedulerService(
         taskAttemptCount = 0,
     )
 
-    private fun buildPreRunBlockedArtifactJson(): String = buildJsonObject {
-        put("artifactType", "screenshot_skipped")
-        put("reason", PRE_RUN_BLOCKED_ARTIFACT_REASON)
-        put("captureRequested", false)
-        put("sensitiveContextActive", false)
-    }.toString()
+    private fun buildPreRunBlockedArtifactJson(): String = buildDiagnosticArtifactJson(
+        artifactType = "screenshot_skipped",
+        reason = PRE_RUN_BLOCKED_ARTIFACT_REASON,
+        captureRequested = false,
+        sensitiveContextActive = false,
+    )
 
-    private fun buildPreRunTimedOutArtifactJson(): String = buildJsonObject {
-        put("artifactType", "screenshot_skipped")
-        put("reason", PRE_RUN_TIMEOUT_ARTIFACT_REASON)
-        put("captureRequested", false)
-        put("sensitiveContextActive", false)
-    }.toString()
+    private fun buildPreRunTimedOutArtifactJson(): String = buildDiagnosticArtifactJson(
+        artifactType = "screenshot_skipped",
+        reason = PRE_RUN_TIMEOUT_ARTIFACT_REASON,
+        captureRequested = false,
+        sensitiveContextActive = false,
+    )
 
-    private fun buildExecutionExceptionArtifactJson(task: TaskDefinition): String = buildJsonObject {
-        if (task.diagnostics.captureScreenshotOnFailure) {
-            put("artifactType", "screenshot_unavailable")
-            put("reason", EXECUTION_EXCEPTION_ARTIFACT_REASON)
-            put("captureRequested", true)
-        } else {
-            put("artifactType", "screenshot_skipped")
-            put("reason", "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY")
-            put("captureRequested", false)
+    private suspend fun buildExecutionExceptionArtifactJson(
+        task: TaskDefinition,
+        taskId: String,
+        runId: String,
+    ): String = when {
+        !task.diagnostics.captureScreenshotOnFailure -> buildDiagnosticArtifactJson(
+            artifactType = "screenshot_skipped",
+            reason = SCREENSHOT_CAPTURE_DISABLED_BY_POLICY,
+            captureRequested = false,
+            sensitiveContextActive = false,
+        )
+
+        !diagnosticsArtifactCaptureGate.canCaptureFailureArtifact(taskId = taskId, runId = runId) -> buildDiagnosticArtifactJson(
+            artifactType = "screenshot_skipped",
+            reason = ARTIFACT_STORAGE_LIMIT_REACHED,
+            captureRequested = true,
+            sensitiveContextActive = false,
+        )
+
+        else -> when (
+            val captureResult = capabilityFacade?.captureScreenshot(
+                ScreenshotCaptureRequest(
+                    taskId = taskId,
+                    runId = runId,
+                ),
+            ) ?: CapabilityResult.Failure(
+                errorCode = "STEP_CAPABILITY_UNAVAILABLE",
+                message = "Screenshot capability is not configured.",
+            )
+        ) {
+            is CapabilityResult.Success -> buildDiagnosticArtifactJson(
+                artifactType = "screenshot",
+                reason = null,
+                captureRequested = true,
+                sensitiveContextActive = false,
+                relativePath = captureResult.value.relativePath,
+                mimeType = captureResult.value.mimeType,
+                fileSizeBytes = captureResult.value.fileSizeBytes,
+            )
+
+            is CapabilityResult.Failure -> buildDiagnosticArtifactJson(
+                artifactType = "screenshot_unavailable",
+                reason = SCREENSHOT_CAPTURE_FAILED,
+                captureRequested = true,
+                sensitiveContextActive = false,
+            )
         }
-        put("sensitiveContextActive", false)
+    }
+
+    private fun buildDiagnosticArtifactJson(
+        artifactType: String,
+        reason: String?,
+        captureRequested: Boolean,
+        sensitiveContextActive: Boolean,
+        relativePath: String? = null,
+        mimeType: String? = null,
+        fileSizeBytes: Long? = null,
+    ): String = buildJsonObject {
+        put("artifactType", artifactType)
+        reason?.let { put("reason", it) }
+        put("captureRequested", captureRequested)
+        put("sensitiveContextActive", sensitiveContextActive)
+        relativePath?.let { put("relativePath", it) }
+        mimeType?.let { put("mimeType", it) }
+        fileSizeBytes?.let { put("fileSizeBytes", it) }
     }.toString()
 
     private suspend fun ensureSessionForPreRunFailure(
@@ -639,7 +714,9 @@ class TaskSchedulerService(
     private companion object {
         const val PRE_RUN_BLOCKED_ARTIFACT_REASON = "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK"
         const val PRE_RUN_TIMEOUT_ARTIFACT_REASON = "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT"
-        const val EXECUTION_EXCEPTION_ARTIFACT_REASON = "DIAG_SCREENSHOT_UNAVAILABLE_FOR_EXECUTION_EXCEPTION"
+        const val SCREENSHOT_CAPTURE_DISABLED_BY_POLICY = "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY"
+        const val ARTIFACT_STORAGE_LIMIT_REACHED = "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED"
+        const val SCREENSHOT_CAPTURE_FAILED = "DIAG_SCREENSHOT_CAPTURE_FAILED"
     }
 
     private fun createInitialScheduleState(task: TaskDefinition, nowMs: Long): TaskScheduleStateRecord =
