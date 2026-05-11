@@ -80,6 +80,12 @@ class RoomRunRecordRepository(
         }
     }
 
+    suspend fun pruneRetainedRunsAtStartup() {
+        database.withTransaction {
+            pruneRetainedRunsForStartup()
+        }
+    }
+
     private fun normalizeLimit(limit: Int): Int = limit.coerceAtLeast(0)
 
     private suspend fun pruneRetainedRuns(taskRun: TaskRunRecord) {
@@ -90,5 +96,13 @@ class RoomRunRecordRepository(
             retainCount = normalizeLimit(retentionPolicy.maxRunsPerTask),
             protectedRunId = taskRun.runId,
         )
+    }
+
+    private suspend fun pruneRetainedRunsForStartup() {
+        val cutoffStartedAt = (nowMsProvider() - retentionPolicy.maxAgeMs).coerceAtLeast(0L)
+        taskRunDao.deleteStartedBefore(cutoffStartedAt)
+        taskRunDao.listTaskIds().forEach { taskId ->
+            taskRunDao.deleteAllExceptMostRecent(taskId, normalizeLimit(retentionPolicy.maxRunsPerTask))
+        }
     }
 }

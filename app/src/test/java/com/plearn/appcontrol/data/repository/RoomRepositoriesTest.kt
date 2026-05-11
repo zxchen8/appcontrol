@@ -765,6 +765,225 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun roomRunRecordRepositoryShouldPruneExpiredRunsOnStartupAndCascadeStepRuns() = runBlocking {
+        val seedingRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        val startupRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 500L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-old",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 120,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-old",
+                    stepId = "step-old",
+                    status = "failed",
+                    startedAt = 105,
+                    finishedAt = 110,
+                    durationMs = 5,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "old failure",
+                    artifactsJson = "{}",
+                ),
+            ),
+        )
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-recent",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 900,
+                finishedAt = 930,
+                durationMs = 30,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+
+        startupRepository.pruneRetainedRunsAtStartup()
+
+        assertEquals(listOf("run-recent"), startupRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
+        assertEquals(emptyList<StepRunRecord>(), startupRepository.findStepRuns("run-old"))
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldPrunePerTaskOverflowAcrossExistingTasksOnStartup() = runBlocking {
+        val seedingRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        val startupRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 1,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-b",
+                name = "任务运行B",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-b\"}",
+                updatedAt = 101,
+            ),
+        )
+
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-a-old",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 120,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-a-new",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 200,
+                finishedAt = 220,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-b-old",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-b",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 300,
+                finishedAt = 320,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-b-new",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-b",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 400,
+                finishedAt = 420,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+
+        startupRepository.pruneRetainedRunsAtStartup()
+
+        assertEquals(listOf("run-a-new"), startupRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
+        assertEquals(listOf("run-b-new"), startupRepository.listRecentTaskRunsByTaskId("task-run-b", 10).map { it.runId })
+    }
+
+    @Test
     fun sessionRepositoryShouldReturnOnlyRunningSessionsOrderedByStartedAtDesc() = runBlocking {
         credentialRepository.replaceCredentialSet(
             CredentialSetRecord(

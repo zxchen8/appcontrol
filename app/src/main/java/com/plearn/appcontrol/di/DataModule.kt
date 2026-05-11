@@ -2,6 +2,7 @@ package com.plearn.appcontrol.di
 
 import android.content.Context
 import androidx.room.Room
+import com.plearn.appcontrol.diagnostics.DiagnosticsRetentionStartupCleaner
 import com.plearn.appcontrol.data.local.AppControlDatabase
 import com.plearn.appcontrol.data.local.dao.ContinuousSessionDao
 import com.plearn.appcontrol.data.local.dao.CredentialProfileDao
@@ -77,11 +78,23 @@ object DataModule {
 
     @Provides
     @Singleton
-    fun provideRunRecordRepository(
+    fun provideRoomRunRecordRepository(
         database: AppControlDatabase,
         taskRunDao: TaskRunDao,
         stepRunDao: StepRunDao,
-    ): RunRecordRepository = RoomRunRecordRepository(database, taskRunDao, stepRunDao)
+    ): RoomRunRecordRepository = RoomRunRecordRepository(database, taskRunDao, stepRunDao)
+
+    @Provides
+    @Singleton
+    fun provideRunRecordRepository(roomRunRecordRepository: RoomRunRecordRepository): RunRecordRepository = roomRunRecordRepository
+
+    @Provides
+    @Singleton
+    fun provideDiagnosticsRetentionStartupCleaner(
+        roomRunRecordRepository: RoomRunRecordRepository,
+    ): DiagnosticsRetentionStartupCleaner = DiagnosticsRetentionStartupCleaner(
+        cleanup = { roomRunRecordRepository.pruneRetainedRunsAtStartup() },
+    )
 
     private const val DATABASE_NAME = "appcontrol.db"
 }
