@@ -26,6 +26,9 @@ interface TaskRunDao {
     @Query("SELECT DISTINCT taskId FROM task_runs")
     suspend fun listTaskIds(): List<String>
 
+    @Query("SELECT COUNT(*) FROM task_runs")
+    suspend fun countAll(): Int
+
     @Query(
         """
         SELECT COALESCE(

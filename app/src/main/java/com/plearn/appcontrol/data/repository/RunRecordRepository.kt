@@ -1,11 +1,16 @@
 package com.plearn.appcontrol.data.repository
 
+import android.util.Log
 import androidx.room.withTransaction
 import com.plearn.appcontrol.data.local.AppControlDatabase
 import com.plearn.appcontrol.data.local.dao.StepRunDao
 import com.plearn.appcontrol.data.local.dao.TaskRunDao
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
+import com.plearn.appcontrol.diagnostics.AndroidDiagnosticsRetentionLogger
+import com.plearn.appcontrol.diagnostics.DiagnosticsCaptureGateLogEvent
+import com.plearn.appcontrol.diagnostics.DiagnosticsCleanupLogEvent
+import com.plearn.appcontrol.diagnostics.DiagnosticsRetentionLogger
 import java.util.concurrent.TimeUnit
 
 data class DiagnosticsRetentionPolicy(
@@ -56,6 +61,7 @@ class RoomRunRecordRepository(
     private val stepRunDao: StepRunDao,
     private val retentionPolicy: DiagnosticsRetentionPolicy = DiagnosticsRetentionPolicy(),
     private val nowMsProvider: () -> Long = System::currentTimeMillis,
+    private val retentionLogger: DiagnosticsRetentionLogger = AndroidDiagnosticsRetentionLogger,
 ) : RunRecordRepository {
     override suspend fun upsertTaskRun(taskRun: TaskRunRecord) {
         taskRunDao.upsert(taskRun.toEntity())
@@ -81,8 +87,20 @@ class RoomRunRecordRepository(
         stepRunDao.findByRunId(runId).map { it.toRecord() }
 
     override suspend fun canCaptureFailureArtifact(): Boolean = database.withTransaction {
-        pruneRetainedRunsForStartup()
-        currentDiagnosticsStorageBytes() < retentionPolicy.captureHighWatermarkBytes
+        pruneRetainedRunsForStartup(trigger = CleanupTrigger.CAPTURE_GATE)
+        val usedBytes = currentDiagnosticsStorageBytes()
+        val canCapture = usedBytes < retentionPolicy.captureHighWatermarkBytes
+        if (!canCapture) {
+            logCaptureGateDeniedSafely(
+                DiagnosticsCaptureGateLogEvent(
+                    trigger = CleanupTrigger.CAPTURE_GATE,
+                    usedBytes = usedBytes,
+                    captureHighWatermarkBytes = retentionPolicy.captureHighWatermarkBytes,
+                    maxStorageBytes = retentionPolicy.maxStorageBytes,
+                ),
+            )
+        }
+        canCapture
     }
 
     override suspend fun recordTaskRun(taskRun: TaskRunRecord, stepRuns: List<StepRunRecord>) {
@@ -97,30 +115,34 @@ class RoomRunRecordRepository(
 
     suspend fun pruneRetainedRunsAtStartup() {
         database.withTransaction {
-            pruneRetainedRunsForStartup()
+            pruneRetainedRunsForStartup(trigger = CleanupTrigger.STARTUP)
         }
     }
 
     private fun normalizeLimit(limit: Int): Int = limit.coerceAtLeast(0)
 
     private suspend fun pruneRetainedRuns(taskRun: TaskRunRecord) {
-        val cutoffStartedAt = (nowMsProvider() - retentionPolicy.maxAgeMs).coerceAtLeast(0L)
-        taskRunDao.deleteStartedBefore(cutoffStartedAt, taskRun.runId)
-        taskRunDao.deleteAllExceptMostRecent(
-            taskId = taskRun.taskId,
-            retainCount = normalizeLimit(retentionPolicy.maxRunsPerTask),
-            protectedRunId = taskRun.runId,
-        )
-        pruneRunsBeyondStorageBudget(protectedRunId = taskRun.runId)
+        logCleanupIfChanged(trigger = CleanupTrigger.RECORD_TASK_RUN) {
+            val cutoffStartedAt = (nowMsProvider() - retentionPolicy.maxAgeMs).coerceAtLeast(0L)
+            taskRunDao.deleteStartedBefore(cutoffStartedAt, taskRun.runId)
+            taskRunDao.deleteAllExceptMostRecent(
+                taskId = taskRun.taskId,
+                retainCount = normalizeLimit(retentionPolicy.maxRunsPerTask),
+                protectedRunId = taskRun.runId,
+            )
+            pruneRunsBeyondStorageBudget(protectedRunId = taskRun.runId)
+        }
     }
 
-    private suspend fun pruneRetainedRunsForStartup() {
-        val cutoffStartedAt = (nowMsProvider() - retentionPolicy.maxAgeMs).coerceAtLeast(0L)
-        taskRunDao.deleteStartedBefore(cutoffStartedAt)
-        taskRunDao.listTaskIds().forEach { taskId ->
-            taskRunDao.deleteAllExceptMostRecent(taskId, normalizeLimit(retentionPolicy.maxRunsPerTask))
+    private suspend fun pruneRetainedRunsForStartup(trigger: String) {
+        logCleanupIfChanged(trigger = trigger) {
+            val cutoffStartedAt = (nowMsProvider() - retentionPolicy.maxAgeMs).coerceAtLeast(0L)
+            taskRunDao.deleteStartedBefore(cutoffStartedAt)
+            taskRunDao.listTaskIds().forEach { taskId ->
+                taskRunDao.deleteAllExceptMostRecent(taskId, normalizeLimit(retentionPolicy.maxRunsPerTask))
+            }
+            pruneRunsBeyondStorageBudget()
         }
-        pruneRunsBeyondStorageBudget()
     }
 
     private suspend fun pruneRunsBeyondStorageBudget(protectedRunId: String? = null) {
@@ -132,4 +154,60 @@ class RoomRunRecordRepository(
 
     private suspend fun currentDiagnosticsStorageBytes(): Long =
         taskRunDao.estimateDiagnosticsStorageBytes() + stepRunDao.estimateDiagnosticsStorageBytes()
+
+    private suspend fun logCleanupIfChanged(trigger: String, block: suspend () -> Unit) {
+        val beforeState = snapshotCleanupState()
+        block()
+        val afterState = snapshotCleanupState()
+        val deletedRunCount = (beforeState.runCount - afterState.runCount).coerceAtLeast(0)
+        if (deletedRunCount == 0 && afterState.bytes >= beforeState.bytes) {
+            return
+        }
+        logCleanupSafely(
+            DiagnosticsCleanupLogEvent(
+                trigger = trigger,
+                deletedRunCount = deletedRunCount,
+                beforeBytes = beforeState.bytes,
+                afterBytes = afterState.bytes,
+                maxStorageBytes = retentionPolicy.maxStorageBytes,
+                captureHighWatermarkBytes = retentionPolicy.captureHighWatermarkBytes,
+            ),
+        )
+    }
+
+    private suspend fun snapshotCleanupState(): CleanupState = CleanupState(
+        runCount = taskRunDao.countAll(),
+        bytes = currentDiagnosticsStorageBytes(),
+    )
+
+    private data class CleanupState(
+        val runCount: Int,
+        val bytes: Long,
+    )
+
+    private fun logCleanupSafely(event: DiagnosticsCleanupLogEvent) {
+        try {
+            retentionLogger.logCleanup(event)
+        } catch (error: Throwable) {
+            Log.w(TAG, "Failed to emit diagnostics cleanup log.", error)
+        }
+    }
+
+    private fun logCaptureGateDeniedSafely(event: DiagnosticsCaptureGateLogEvent) {
+        try {
+            retentionLogger.logCaptureGateDenied(event)
+        } catch (error: Throwable) {
+            Log.w(TAG, "Failed to emit diagnostics capture gate denial log.", error)
+        }
+    }
+
+    private object CleanupTrigger {
+        const val STARTUP = "startup"
+        const val RECORD_TASK_RUN = "record_task_run"
+        const val CAPTURE_GATE = "capture_gate"
+    }
+
+    private companion object {
+        const val TAG = "RunRecordRepo"
+    }
 }

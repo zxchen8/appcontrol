@@ -12,6 +12,9 @@ import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
+import com.plearn.appcontrol.diagnostics.DiagnosticsCaptureGateLogEvent
+import com.plearn.appcontrol.diagnostics.DiagnosticsCleanupLogEvent
+import com.plearn.appcontrol.diagnostics.DiagnosticsRetentionLogger
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -768,6 +771,7 @@ class RoomRepositoriesTest {
 
     @Test
     fun roomRunRecordRepositoryShouldDenyFailureArtifactCaptureWhenStorageWatermarkIsReached() = runBlocking {
+        val logger = RecordingDiagnosticsRetentionLogger()
         val budgetRepository = RoomRunRecordRepository(
             database,
             database.taskRunDao(),
@@ -779,6 +783,7 @@ class RoomRepositoriesTest {
                 captureHighWatermarkBytes = 80L,
             ),
             nowMsProvider = { 1_000L },
+            retentionLogger = logger,
         )
         taskRepository.upsertTaskDefinition(
             TaskDefinitionRecord(
@@ -826,10 +831,14 @@ class RoomRepositoriesTest {
         )
 
         assertFalse(budgetRepository.canCaptureFailureArtifact())
+        assertEquals(1, logger.captureDeniedEvents.size)
+        assertEquals("capture_gate", logger.captureDeniedEvents.single().trigger)
+        assertTrue(logger.captureDeniedEvents.single().usedBytes >= 80L)
     }
 
     @Test
     fun roomRunRecordRepositoryShouldPruneExpiredDiagnosticsBeforeEvaluatingFailureArtifactBudget() = runBlocking {
+        val logger = RecordingDiagnosticsRetentionLogger()
         val seedingRepository = RoomRunRecordRepository(
             database,
             database.taskRunDao(),
@@ -853,6 +862,7 @@ class RoomRepositoriesTest {
                 captureHighWatermarkBytes = 80L,
             ),
             nowMsProvider = { 1_000L },
+            retentionLogger = logger,
         )
         taskRepository.upsertTaskDefinition(
             TaskDefinitionRecord(
@@ -921,10 +931,14 @@ class RoomRepositoriesTest {
 
         assertTrue(budgetRepository.canCaptureFailureArtifact())
         assertEquals(listOf("run-recent-light"), budgetRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
+        assertEquals(1, logger.cleanupEvents.size)
+        assertEquals("capture_gate", logger.cleanupEvents.single().trigger)
+        assertEquals(1, logger.cleanupEvents.single().deletedRunCount)
     }
 
     @Test
     fun roomRunRecordRepositoryShouldPruneExpiredRunsOnStartupAndCascadeStepRuns() = runBlocking {
+        val logger = RecordingDiagnosticsRetentionLogger()
         val seedingRepository = RoomRunRecordRepository(
             database,
             database.taskRunDao(),
@@ -944,6 +958,7 @@ class RoomRepositoriesTest {
                 maxAgeMs = 500L,
             ),
             nowMsProvider = { 1_000L },
+            retentionLogger = logger,
         )
         taskRepository.upsertTaskDefinition(
             TaskDefinitionRecord(
@@ -1012,6 +1027,163 @@ class RoomRepositoriesTest {
 
         assertEquals(listOf("run-recent"), startupRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
         assertEquals(emptyList<StepRunRecord>(), startupRepository.findStepRuns("run-old"))
+        assertEquals(1, logger.cleanupEvents.size)
+        assertEquals("startup", logger.cleanupEvents.single().trigger)
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldIgnoreCaptureGateLoggerFailure() = runBlocking {
+        val budgetRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+                maxStorageBytes = 300L,
+                captureHighWatermarkBytes = 80L,
+            ),
+            nowMsProvider = { 1_000L },
+            retentionLogger = ThrowingDiagnosticsRetentionLogger(throwOnCaptureDenied = true),
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        budgetRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-budget-heavy-logger",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 900,
+                finishedAt = 950,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = "heavy diagnostics payload",
+                artifactsJson = "{}",
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-budget-heavy-logger",
+                    stepId = "step-heavy",
+                    status = "failed",
+                    startedAt = 905,
+                    finishedAt = 910,
+                    durationMs = 5,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "diagnostics message",
+                    artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"payload\":\"${"x".repeat(32)}\"}",
+                ),
+            ),
+        )
+
+        assertFalse(budgetRepository.canCaptureFailureArtifact())
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldIgnoreCleanupLoggerFailureWhenStartupPrunesRuns() = runBlocking {
+        val seedingRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        val startupRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 500L,
+            ),
+            nowMsProvider = { 1_000L },
+            retentionLogger = ThrowingDiagnosticsRetentionLogger(throwOnCleanup = true),
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-old-logger",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 120,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-old-logger",
+                    stepId = "step-old",
+                    status = "failed",
+                    startedAt = 105,
+                    finishedAt = 110,
+                    durationMs = 5,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "old failure",
+                    artifactsJson = "{}",
+                ),
+            ),
+        )
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-recent-logger",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 900,
+                finishedAt = 930,
+                durationMs = 30,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+
+        startupRepository.pruneRetainedRunsAtStartup()
+
+        assertEquals(listOf("run-recent-logger"), startupRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
+        assertEquals(emptyList<StepRunRecord>(), startupRepository.findStepRuns("run-old-logger"))
     }
 
     @Test
@@ -1140,6 +1312,36 @@ class RoomRepositoriesTest {
 
         assertEquals(listOf("run-a-new"), startupRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
         assertEquals(listOf("run-b-new"), startupRepository.listRecentTaskRunsByTaskId("task-run-b", 10).map { it.runId })
+    }
+
+    private class RecordingDiagnosticsRetentionLogger : DiagnosticsRetentionLogger {
+        val cleanupEvents = mutableListOf<DiagnosticsCleanupLogEvent>()
+        val captureDeniedEvents = mutableListOf<DiagnosticsCaptureGateLogEvent>()
+
+        override fun logCleanup(event: DiagnosticsCleanupLogEvent) {
+            cleanupEvents += event
+        }
+
+        override fun logCaptureGateDenied(event: DiagnosticsCaptureGateLogEvent) {
+            captureDeniedEvents += event
+        }
+    }
+
+    private class ThrowingDiagnosticsRetentionLogger(
+        private val throwOnCleanup: Boolean = false,
+        private val throwOnCaptureDenied: Boolean = false,
+    ) : DiagnosticsRetentionLogger {
+        override fun logCleanup(event: DiagnosticsCleanupLogEvent) {
+            if (throwOnCleanup) {
+                throw IllegalStateException("cleanup logger failure")
+            }
+        }
+
+        override fun logCaptureGateDenied(event: DiagnosticsCaptureGateLogEvent) {
+            if (throwOnCaptureDenied) {
+                throw IllegalStateException("capture gate logger failure")
+            }
+        }
     }
 
     @Test
