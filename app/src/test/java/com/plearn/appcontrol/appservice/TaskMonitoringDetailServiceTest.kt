@@ -167,6 +167,35 @@ class TaskMonitoringDetailServiceTest {
     }
 
     @Test
+    fun shouldFormatPersistedScreenshotArtifactForFailureContext() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionWithDiagnostics, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(
+                        stepRun1,
+                        stepRun2.copy(
+                            artifactsJson = "{\"artifactType\":\"screenshot\",\"captureRequested\":true,\"sensitiveContextActive\":false,\"relativePath\":\"diagnostics/screenshots/task-a/run-newer/step-2-${"step-2".hashCode().toUInt().toString(16)}-attempt1.png\",\"mimeType\":\"image/png\",\"fileSizeBytes\":4096}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals(
+            listOf(
+                "step-2=截图已保存 | 路径=diagnostics/screenshots/task-a/run-newer/step-2-${"step-2".hashCode().toUInt().toString(16)}-attempt1.png | 大小=4096 B | 请求截图=true | 敏感上下文=false",
+            ),
+            snapshot?.failureContext?.stepArtifacts,
+        )
+        assertEquals(emptyList<String>(), snapshot?.failureContext?.runArtifacts)
+    }
+
+    @Test
     fun shouldDeriveRunLevelPolicyDisabledArtifactWhenRunFailsBeforeAnyStep() = runBlocking {
         val runLevelFailure = newerRun.copy(
             runId = "run-level-failure",

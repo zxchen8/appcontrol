@@ -57,8 +57,13 @@ object CapabilityModule {
 
     @Provides
     @Singleton
-    fun provideDeviceControlPort(rootShellPort: RootShellPort): DeviceControlPort =
-        RootDeviceControlPort(shell = rootShellPort)
+    fun provideDeviceControlPort(
+        rootShellPort: RootShellPort,
+        @ApplicationContext context: Context,
+    ): DeviceControlPort = RootDeviceControlPort(
+        shell = rootShellPort,
+        screenshotRootDir = context.filesDir.resolve("diagnostics/screenshots"),
+    )
 
     @Provides
     @Singleton

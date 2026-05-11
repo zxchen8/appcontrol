@@ -28,6 +28,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.nio.file.Files
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -943,6 +944,65 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun roomRunRecordRepositoryShouldCountPersistedScreenshotFilesTowardsCaptureWatermark() = runBlocking {
+        val screenshotRootDir = Files.createTempDirectory("diag-shot-budget").toFile()
+        try {
+            val budgetRepository = RoomRunRecordRepository(
+                database,
+                database.taskRunDao(),
+                database.stepRunDao(),
+                diagnosticsArtifactFileStore = FileBackedDiagnosticsArtifactFileStore(screenshotRootDir) { 1_000L },
+                retentionPolicy = DiagnosticsRetentionPolicy(
+                    maxRunsPerTask = 10,
+                    maxScreenshotArtifactsPerTask = 10,
+                    maxAgeMs = 10_000L,
+                    maxStorageBytes = 300L,
+                    captureHighWatermarkBytes = 80L,
+                ),
+                nowMsProvider = { 1_000L },
+            )
+            taskRepository.upsertTaskDefinition(
+                TaskDefinitionRecord(
+                    taskId = "task-run-a",
+                    name = "任务运行A",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = "{\"taskId\":\"task-run-a\"}",
+                    updatedAt = 100,
+                ),
+            )
+            budgetRepository.upsertTaskRun(
+                TaskRunRecord(
+                    runId = "run-existing",
+                    sessionId = null,
+                    cycleNo = null,
+                    taskId = "task-run-a",
+                    credentialSetId = null,
+                    credentialProfileId = null,
+                    credentialAlias = null,
+                    status = "failed",
+                    startedAt = 900,
+                    finishedAt = 950,
+                    durationMs = 50,
+                    triggerType = "manual",
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = null,
+                ),
+            )
+            screenshotRootDir.resolve("task-run-a/run-existing/run.png").apply {
+                parentFile?.mkdirs()
+                writeBytes(ByteArray(200) { 1 })
+                setLastModified(950L)
+            }
+
+            assertFalse(budgetRepository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-new"))
+        } finally {
+            screenshotRootDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun roomRunRecordRepositoryShouldPrioritizeSelectedRunEventsOverNewerGlobalCleanupEvents() = runBlocking {
         val repository = RoomRunRecordRepository(
             database,
@@ -1156,6 +1216,78 @@ class RoomRepositoriesTest {
             startupRepository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 10, runId = "run-old-pruned")
                 .filter { it.runId == "run-old-pruned" },
         )
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldDeleteScreenshotArtifactsWhenRunIsPruned() = runBlocking {
+        val screenshotRootDir = Files.createTempDirectory("diag-shot-prune").toFile()
+        try {
+            val seedingRepository = RoomRunRecordRepository(
+                database,
+                database.taskRunDao(),
+                database.stepRunDao(),
+                diagnosticsArtifactFileStore = FileBackedDiagnosticsArtifactFileStore(screenshotRootDir) { 1_000L },
+                retentionPolicy = DiagnosticsRetentionPolicy(
+                    maxRunsPerTask = 10,
+                    maxScreenshotArtifactsPerTask = 10,
+                    maxAgeMs = 10_000L,
+                ),
+                nowMsProvider = { 1_000L },
+            )
+            val startupRepository = RoomRunRecordRepository(
+                database,
+                database.taskRunDao(),
+                database.stepRunDao(),
+                diagnosticsArtifactFileStore = FileBackedDiagnosticsArtifactFileStore(screenshotRootDir) { 1_000L },
+                retentionPolicy = DiagnosticsRetentionPolicy(
+                    maxRunsPerTask = 10,
+                    maxScreenshotArtifactsPerTask = 10,
+                    maxAgeMs = 500L,
+                ),
+                nowMsProvider = { 1_000L },
+            )
+            taskRepository.upsertTaskDefinition(
+                TaskDefinitionRecord(
+                    taskId = "task-run-a",
+                    name = "任务运行A",
+                    enabled = true,
+                    triggerType = "cron",
+                    definitionStatus = "ready",
+                    rawJson = "{\"taskId\":\"task-run-a\"}",
+                    updatedAt = 100,
+                ),
+            )
+            seedingRepository.recordTaskRun(
+                taskRun = TaskRunRecord(
+                    runId = "run-old-pruned",
+                    sessionId = null,
+                    cycleNo = null,
+                    taskId = "task-run-a",
+                    credentialSetId = null,
+                    credentialProfileId = null,
+                    credentialAlias = null,
+                    status = "failed",
+                    startedAt = 100,
+                    finishedAt = 120,
+                    durationMs = 20,
+                    triggerType = "manual",
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = null,
+                ),
+                stepRuns = emptyList(),
+            )
+            val screenshotFile = screenshotRootDir.resolve("task-run-a/run-old-pruned/run.png").apply {
+                parentFile?.mkdirs()
+                writeBytes(ByteArray(64) { 2 })
+                setLastModified(1_000L)
+            }
+
+            startupRepository.pruneRetainedRunsAtStartup()
+
+            assertFalse(screenshotFile.exists())
+        } finally {
+            screenshotRootDir.deleteRecursively()
+        }
     }
 
     @Test

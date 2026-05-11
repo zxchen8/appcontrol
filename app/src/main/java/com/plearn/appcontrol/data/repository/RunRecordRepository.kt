@@ -6,6 +6,7 @@ import com.plearn.appcontrol.data.local.AppControlDatabase
 import com.plearn.appcontrol.data.local.dao.DiagnosticsEventDao
 import com.plearn.appcontrol.data.local.dao.StepRunDao
 import com.plearn.appcontrol.data.local.dao.TaskRunDao
+import com.plearn.appcontrol.data.local.dao.TaskRunKey
 import com.plearn.appcontrol.data.model.DiagnosticsEventRecord
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
@@ -17,12 +18,14 @@ import com.plearn.appcontrol.diagnostics.DiagnosticsCleanupLogEvent
 import com.plearn.appcontrol.diagnostics.DiagnosticsRetentionLogger
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 data class DiagnosticsRetentionPolicy(
     val maxRunsPerTask: Int = DEFAULT_MAX_RUNS_PER_TASK,
     val maxEventsPerTask: Int = DEFAULT_MAX_EVENTS_PER_TASK,
     val maxGlobalEvents: Int = DEFAULT_MAX_GLOBAL_EVENTS,
+    val maxScreenshotArtifactsPerTask: Int = DEFAULT_MAX_SCREENSHOT_ARTIFACTS_PER_TASK,
     val maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
     val maxStorageBytes: Long = DEFAULT_MAX_STORAGE_BYTES,
     val captureHighWatermarkBytes: Long = DEFAULT_CAPTURE_HIGH_WATERMARK_BYTES,
@@ -31,6 +34,7 @@ data class DiagnosticsRetentionPolicy(
         require(maxRunsPerTask >= 0) { "maxRunsPerTask must be >= 0" }
         require(maxEventsPerTask >= 0) { "maxEventsPerTask must be >= 0" }
         require(maxGlobalEvents >= 0) { "maxGlobalEvents must be >= 0" }
+        require(maxScreenshotArtifactsPerTask >= 0) { "maxScreenshotArtifactsPerTask must be >= 0" }
         require(maxAgeMs >= 0) { "maxAgeMs must be >= 0" }
         require(maxStorageBytes >= 0) { "maxStorageBytes must be >= 0" }
         require(captureHighWatermarkBytes >= 0) { "captureHighWatermarkBytes must be >= 0" }
@@ -44,9 +48,177 @@ data class DiagnosticsRetentionPolicy(
         private const val DEFAULT_EVENT_TYPES_PER_RUN: Int = 2
         const val DEFAULT_MAX_EVENTS_PER_TASK: Int = DEFAULT_MAX_RUNS_PER_TASK * DEFAULT_EVENT_TYPES_PER_RUN
         const val DEFAULT_MAX_GLOBAL_EVENTS: Int = DEFAULT_MAX_RUNS_PER_TASK
+        const val DEFAULT_MAX_SCREENSHOT_ARTIFACTS_PER_TASK: Int = DEFAULT_MAX_RUNS_PER_TASK
         val DEFAULT_MAX_AGE_MS: Long = TimeUnit.DAYS.toMillis(14)
         const val DEFAULT_MAX_STORAGE_BYTES: Long = 512L * 1024L * 1024L
         const val DEFAULT_CAPTURE_HIGH_WATERMARK_BYTES: Long = DEFAULT_MAX_STORAGE_BYTES * 9L / 10L
+    }
+}
+
+data class DiagnosticsArtifactRunRef(
+    val taskId: String,
+    val runId: String,
+)
+
+interface DiagnosticsArtifactFileStore {
+    fun estimateStorageBytes(): Long
+
+    fun prune(
+        maxAgeMs: Long,
+        maxArtifactsPerTask: Int,
+        activeRunRefsByTask: Map<String, Set<String>>,
+        protectedRunRef: DiagnosticsArtifactRunRef? = null,
+    )
+
+    fun deleteOldestArtifact(protectedRunRef: DiagnosticsArtifactRunRef? = null): Boolean
+}
+
+object NoOpDiagnosticsArtifactFileStore : DiagnosticsArtifactFileStore {
+    override fun estimateStorageBytes(): Long = 0L
+
+    override fun prune(
+        maxAgeMs: Long,
+        maxArtifactsPerTask: Int,
+        activeRunRefsByTask: Map<String, Set<String>>,
+        protectedRunRef: DiagnosticsArtifactRunRef?,
+    ) = Unit
+
+    override fun deleteOldestArtifact(protectedRunRef: DiagnosticsArtifactRunRef?): Boolean = false
+}
+
+class FileBackedDiagnosticsArtifactFileStore(
+    private val screenshotRootDir: File,
+    private val nowMsProvider: () -> Long = System::currentTimeMillis,
+) : DiagnosticsArtifactFileStore {
+    override fun estimateStorageBytes(): Long = listArtifacts().sumOf(StoredArtifact::fileSizeBytes)
+
+    override fun prune(
+        maxAgeMs: Long,
+        maxArtifactsPerTask: Int,
+        activeRunRefsByTask: Map<String, Set<String>>,
+        protectedRunRef: DiagnosticsArtifactRunRef?,
+    ) {
+        val sanitizedActiveRunRefsByTask = sanitizeActiveRunRefsByTask(activeRunRefsByTask)
+        val sanitizedProtectedRunRef = protectedRunRef?.sanitize()
+        val cutoffModifiedAt = (nowMsProvider() - maxAgeMs).coerceAtLeast(0L)
+
+        listArtifacts().forEach { artifact ->
+            val isProtected = artifact.matches(sanitizedProtectedRunRef)
+            val isActive = sanitizedActiveRunRefsByTask[artifact.taskId]?.contains(artifact.runId) == true
+            if (!isProtected && (!isActive || artifact.lastModifiedAt < cutoffModifiedAt)) {
+                deleteArtifact(artifact)
+            }
+        }
+
+        listArtifacts()
+            .groupBy(StoredArtifact::taskId)
+            .values
+            .forEach { artifactsForTask ->
+                var retainedCount = 0
+                for (artifact in artifactsForTask.sortedWith(compareByDescending<StoredArtifact> { it.lastModifiedAt }.thenByDescending { it.relativePath })) {
+                    if (artifact.matches(sanitizedProtectedRunRef)) {
+                        continue
+                    }
+                    if (retainedCount < maxArtifactsPerTask) {
+                        retainedCount += 1
+                        continue
+                    }
+                    deleteArtifact(artifact)
+                }
+            }
+    }
+
+    override fun deleteOldestArtifact(protectedRunRef: DiagnosticsArtifactRunRef?): Boolean {
+        val sanitizedProtectedRunRef = protectedRunRef?.sanitize()
+        val oldestArtifact = listArtifacts()
+            .filterNot { it.matches(sanitizedProtectedRunRef) }
+            .minWithOrNull(compareBy<StoredArtifact> { it.lastModifiedAt }.thenBy { it.relativePath })
+            ?: return false
+        return deleteArtifact(oldestArtifact)
+    }
+
+    private fun listArtifacts(): List<StoredArtifact> {
+        if (!screenshotRootDir.exists()) {
+            return emptyList()
+        }
+        return screenshotRootDir.listFiles()
+            .orEmpty()
+            .filter(File::isDirectory)
+            .flatMap { taskDirectory ->
+                taskDirectory.listFiles()
+                    .orEmpty()
+                    .filter(File::isDirectory)
+                    .flatMap { runDirectory ->
+                        runDirectory.listFiles()
+                            .orEmpty()
+                            .filter(File::isFile)
+                            .map { artifactFile ->
+                                StoredArtifact(
+                                    file = artifactFile,
+                                    taskId = taskDirectory.name,
+                                    runId = runDirectory.name,
+                                    relativePath = buildString {
+                                        append(SCREENSHOT_RELATIVE_ROOT)
+                                        append('/')
+                                        append(taskDirectory.name)
+                                        append('/')
+                                        append(runDirectory.name)
+                                        append('/')
+                                        append(artifactFile.name)
+                                    },
+                                    fileSizeBytes = artifactFile.length(),
+                                    lastModifiedAt = artifactFile.lastModified(),
+                                )
+                            }
+                    }
+            }
+    }
+
+    private fun sanitizeActiveRunRefsByTask(activeRunRefsByTask: Map<String, Set<String>>): Map<String, Set<String>> =
+        activeRunRefsByTask.mapKeys { sanitizePathSegment(it.key) }
+            .mapValues { (_, runIds) -> runIds.map(::sanitizePathSegment).toSet() }
+
+    private fun DiagnosticsArtifactRunRef.sanitize(): DiagnosticsArtifactRunRef = DiagnosticsArtifactRunRef(
+        taskId = sanitizePathSegment(taskId),
+        runId = sanitizePathSegment(runId),
+    )
+
+    private fun deleteArtifact(artifact: StoredArtifact): Boolean {
+        if (!artifact.file.delete()) {
+            return false
+        }
+        cleanupEmptyParents(artifact.file.parentFile)
+        return true
+    }
+
+    private fun cleanupEmptyParents(directory: File?) {
+        var current = directory
+        while (current != null && current != screenshotRootDir) {
+            if (!current.isDirectory || !current.list().isNullOrEmpty()) {
+                return
+            }
+            current.delete()
+            current = current.parentFile
+        }
+    }
+
+    private fun sanitizePathSegment(value: String): String = value.replace(PATH_SEGMENT_REGEX, "_").ifBlank { "artifact" }
+
+    private data class StoredArtifact(
+        val file: File,
+        val taskId: String,
+        val runId: String,
+        val relativePath: String,
+        val fileSizeBytes: Long,
+        val lastModifiedAt: Long,
+    ) {
+        fun matches(runRef: DiagnosticsArtifactRunRef?): Boolean =
+            runRef != null && taskId == runRef.taskId && runId == runRef.runId
+    }
+
+    private companion object {
+        private val PATH_SEGMENT_REGEX = Regex("[^a-zA-Z0-9._-]")
+        private const val SCREENSHOT_RELATIVE_ROOT = "diagnostics/screenshots"
     }
 }
 
@@ -74,6 +246,7 @@ class RoomRunRecordRepository(
     private val taskRunDao: TaskRunDao,
     private val stepRunDao: StepRunDao,
     private val diagnosticsEventDao: DiagnosticsEventDao = database.diagnosticsEventDao(),
+    private val diagnosticsArtifactFileStore: DiagnosticsArtifactFileStore = NoOpDiagnosticsArtifactFileStore,
     private val retentionPolicy: DiagnosticsRetentionPolicy = DiagnosticsRetentionPolicy(),
     private val nowMsProvider: () -> Long = System::currentTimeMillis,
     private val retentionLogger: DiagnosticsRetentionLogger = AndroidDiagnosticsRetentionLogger,
@@ -126,7 +299,11 @@ class RoomRunRecordRepository(
                 payloadJson = deniedEvent.toPayloadJson(),
             )
             pruneDiagnosticsEventCountBudget(taskId)
-            pruneRunsBeyondStorageBudget(protectedRunId = runId, protectedEventId = protectedEventId)
+            pruneRunsBeyondStorageBudget(
+                protectedRunId = runId,
+                protectedEventId = protectedEventId,
+                protectedArtifactRunRef = protectedArtifactRunRef(taskId, runId),
+            )
             logCaptureGateDeniedSafely(
                 deniedEvent,
             )
@@ -169,7 +346,11 @@ class RoomRunRecordRepository(
             diagnosticsEventDao.deleteAllExceptMostRecentForTask(taskRun.taskId, normalizeLimit(retentionPolicy.maxEventsPerTask))
             diagnosticsEventDao.deleteAllExceptMostRecentGlobal(normalizeLimit(retentionPolicy.maxGlobalEvents))
             pruneOrphanedDiagnosticsEvents(protectedRunId = taskRun.runId)
-            pruneRunsBeyondStorageBudget(protectedRunId = taskRun.runId)
+            pruneDiagnosticsArtifactFiles(protectedRunRef = DiagnosticsArtifactRunRef(taskRun.taskId, taskRun.runId))
+            pruneRunsBeyondStorageBudget(
+                protectedRunId = taskRun.runId,
+                protectedArtifactRunRef = DiagnosticsArtifactRunRef(taskRun.taskId, taskRun.runId),
+            )
         }
     }
 
@@ -184,27 +365,51 @@ class RoomRunRecordRepository(
             }
             diagnosticsEventDao.deleteAllExceptMostRecentGlobal(normalizeLimit(retentionPolicy.maxGlobalEvents))
             pruneOrphanedDiagnosticsEvents(protectedRunId = runId)
-            pruneRunsBeyondStorageBudget()
+            pruneDiagnosticsArtifactFiles(protectedRunRef = protectedArtifactRunRef(taskId, runId))
+            pruneRunsBeyondStorageBudget(protectedArtifactRunRef = protectedArtifactRunRef(taskId, runId))
         }
     }
 
-    private suspend fun pruneRunsBeyondStorageBudget(protectedRunId: String? = null, protectedEventId: Long? = null) {
+    private suspend fun pruneRunsBeyondStorageBudget(
+        protectedRunId: String? = null,
+        protectedEventId: Long? = null,
+        protectedArtifactRunRef: DiagnosticsArtifactRunRef? = null,
+    ) {
         while (currentDiagnosticsStorageBytes() > retentionPolicy.maxStorageBytes) {
             val oldestEventId = diagnosticsEventDao.findOldestId(protectedEventId)
             if (oldestEventId != null) {
                 diagnosticsEventDao.deleteById(oldestEventId)
                 continue
             }
+            if (diagnosticsArtifactFileStore.deleteOldestArtifact(protectedArtifactRunRef)) {
+                continue
+            }
             val oldestRunId = taskRunDao.findOldestRunId(protectedRunId) ?: break
             taskRunDao.deleteByRunId(oldestRunId)
             pruneOrphanedDiagnosticsEvents(protectedRunId = protectedRunId)
+            pruneDiagnosticsArtifactFiles(protectedRunRef = protectedArtifactRunRef)
         }
     }
 
     private suspend fun currentDiagnosticsStorageBytes(): Long =
         taskRunDao.estimateDiagnosticsStorageBytes() +
             stepRunDao.estimateDiagnosticsStorageBytes() +
-            diagnosticsEventDao.estimateDiagnosticsStorageBytes()
+            diagnosticsEventDao.estimateDiagnosticsStorageBytes() +
+            diagnosticsArtifactFileStore.estimateStorageBytes()
+
+    private suspend fun pruneDiagnosticsArtifactFiles(protectedRunRef: DiagnosticsArtifactRunRef? = null) {
+        diagnosticsArtifactFileStore.prune(
+            maxAgeMs = retentionPolicy.maxAgeMs,
+            maxArtifactsPerTask = normalizeLimit(retentionPolicy.maxScreenshotArtifactsPerTask),
+            activeRunRefsByTask = taskRunDao.listAllRunKeys()
+                .groupBy(TaskRunKey::taskId)
+                .mapValues { (_, runKeys) -> runKeys.map(TaskRunKey::runId).toSet() },
+            protectedRunRef = protectedRunRef,
+        )
+    }
+
+    private fun protectedArtifactRunRef(taskId: String?, runId: String?): DiagnosticsArtifactRunRef? =
+        if (taskId == null || runId == null) null else DiagnosticsArtifactRunRef(taskId = taskId, runId = runId)
 
     private suspend fun pruneOrphanedDiagnosticsEvents(protectedRunId: String? = null) {
         diagnosticsEventDao.deleteOrphanedRunScopedEvents(protectedRunId)
@@ -239,7 +444,11 @@ class RoomRunRecordRepository(
             payloadJson = cleanupEvent.toPayloadJson(),
         )
         pruneDiagnosticsEventCountBudget(taskId)
-        pruneRunsBeyondStorageBudget(protectedRunId = runId, protectedEventId = protectedEventId)
+        pruneRunsBeyondStorageBudget(
+            protectedRunId = runId,
+            protectedEventId = protectedEventId,
+            protectedArtifactRunRef = protectedArtifactRunRef(taskId, runId),
+        )
         logCleanupSafely(cleanupEvent)
     }
 

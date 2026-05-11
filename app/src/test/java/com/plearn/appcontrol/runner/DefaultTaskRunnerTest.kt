@@ -9,6 +9,8 @@ import com.plearn.appcontrol.capability.InputTextSource
 import com.plearn.appcontrol.capability.InputTextSummary
 import com.plearn.appcontrol.capability.ScreenPoint
 import com.plearn.appcontrol.capability.SelectorType
+import com.plearn.appcontrol.capability.ScreenshotCapture
+import com.plearn.appcontrol.capability.ScreenshotCaptureRequest
 import com.plearn.appcontrol.capability.SwipeRequest
 import com.plearn.appcontrol.capability.TapTarget
 import com.plearn.appcontrol.capability.WaitElementState
@@ -116,6 +118,7 @@ class DefaultTaskRunnerTest {
             listOf(
                 "start:com.example.target",
                 "tap:text=登录",
+                "captureScreenshot:smoke-task:run-002:step-tap-login:1",
                 "tap:text=登录",
                 "stop:com.example.target",
             ),
@@ -164,6 +167,7 @@ class DefaultTaskRunnerTest {
             listOf(
                 "start:com.example.target",
                 "wait:text=首页:APPEARED:5000",
+                "captureScreenshot:smoke-task:run-003:step-wait-home:1",
                 "start:com.example.target",
                 "wait:text=首页:APPEARED:5000",
                 "stop:com.example.target",
@@ -215,16 +219,14 @@ class DefaultTaskRunnerTest {
 
         assertEquals(TaskRunStatus.TIMED_OUT, result.taskRun.status)
         assertEquals(emptyList<StepRunRecord>(), result.stepRuns)
-        assertEquals(
-            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
-            result.taskRun.artifactReason(),
-        )
+        assertEquals("screenshot", result.taskRun.artifactType())
+        assertEquals(expectedRunArtifactPath(runId = "run-004b"), result.taskRun.artifactRelativePath())
     }
 
     @Test
     fun shouldRecordSuppressedRunLevelArtifactWhenTaskTimesOutAfterSensitiveContextActivated() = runBlocking {
         val facade = RecordingCapabilityFacade().apply {
-            waitDelayMs = 50
+            waitDelayMs = 200
         }
         val runner = DefaultTaskRunner(
             capabilityFacade = facade,
@@ -234,7 +236,7 @@ class DefaultTaskRunnerTest {
 
         val result = runner.run(
             task = sampleTask(
-                executionPolicy = defaultExecutionPolicy(taskTimeoutMs = 10),
+                executionPolicy = defaultExecutionPolicy(taskTimeoutMs = 50),
                 variables = buildJsonObject {
                     putJsonObject("secretPhone") {
                         put("value", "13800138000")
@@ -287,10 +289,8 @@ class DefaultTaskRunnerTest {
             listOf(StepRunStatus.FAILED, StepRunStatus.SUCCESS),
             result.stepRuns.map(StepRunRecord::status),
         )
-        assertEquals(
-            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
-            result.taskRun.artifactReason(),
-        )
+        assertEquals("screenshot", result.taskRun.artifactType())
+        assertEquals(expectedRunArtifactPath(runId = "run-004d"), result.taskRun.artifactRelativePath())
     }
 
     @Test
@@ -324,6 +324,7 @@ class DefaultTaskRunnerTest {
         assertEquals(
             listOf(
                 "tap:text=登录",
+                "captureScreenshot:smoke-task:run-005:step-tap-login:1",
                 "stop:com.example.target",
             ),
             facade.operations,
@@ -381,6 +382,72 @@ class DefaultTaskRunnerTest {
         assertEquals(
             "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED",
             result.stepRuns.single().artifactReason(),
+        )
+    }
+
+    @Test
+    fun shouldPersistScreenshotArtifactWhenStepFailsAndCaptureIsAllowed() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "login button missing",
+            )
+            screenshotResults += CapabilityResult.Success(
+                ScreenshotCapture(
+                    relativePath = expectedStepArtifactPath(runId = "run-006c", stepId = "step-tap-login"),
+                    mimeType = "image/png",
+                    fileSizeBytes = 4096L,
+                ),
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-006c" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                steps = listOf(tapElementStep()),
+            ),
+        )
+
+        assertEquals("screenshot", result.stepRuns.single().artifactType())
+        assertEquals(expectedStepArtifactPath(runId = "run-006c", stepId = "step-tap-login"), result.stepRuns.single().artifactRelativePath())
+        assertEquals(4096L, result.stepRuns.single().artifactFileSizeBytes())
+    }
+
+    @Test
+    fun shouldCreateDistinctScreenshotPathsAcrossTaskRetriesForSameStepFailure() = runBlocking {
+        val facade = RecordingCapabilityFacade().apply {
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "not found-attempt-1",
+            )
+            tapResults += CapabilityResult.Failure(
+                errorCode = CapabilityFailureCode.STEP_ELEMENT_NOT_FOUND,
+                message = "not found-attempt-2",
+            )
+        }
+        val runner = DefaultTaskRunner(
+            capabilityFacade = facade,
+            timeSource = FakeRunnerTimeSource(),
+            runIdFactory = { "run-retry-collision" },
+        )
+
+        val result = runner.run(
+            task = sampleTask(
+                executionPolicy = defaultExecutionPolicy(maxRetries = 1, retryBackoffMs = 0L),
+                steps = listOf(tapElementStep()),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                expectedStepArtifactPath(runId = "run-retry-collision", stepId = "step-tap-login", taskAttempt = 1),
+                expectedStepArtifactPath(runId = "run-retry-collision", stepId = "step-tap-login", taskAttempt = 2),
+            ),
+            result.stepRuns.mapNotNull { it.artifactRelativePath() },
         )
     }
 
@@ -517,10 +584,8 @@ class DefaultTaskRunnerTest {
             ),
         )
 
-        assertEquals(
-            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
-            result.stepRuns.last().artifactReason(),
-        )
+        assertEquals("screenshot", result.stepRuns.last().artifactType())
+        assertEquals(expectedStepArtifactPath(runId = "run-008", stepId = "step-tap-login"), result.stepRuns.last().artifactRelativePath())
         assertEquals(false, result.stepRuns.last().artifactSensitiveContextActive())
     }
 
@@ -555,10 +620,8 @@ class DefaultTaskRunnerTest {
             ),
         )
 
-        assertEquals(
-            "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED",
-            result.stepRuns.last().artifactReason(),
-        )
+        assertEquals("screenshot", result.stepRuns.last().artifactType())
+        assertEquals(expectedStepArtifactPath(runId = "run-010", stepId = "step-after-clear"), result.stepRuns.last().artifactRelativePath())
         assertEquals(false, result.stepRuns.last().artifactSensitiveContextActive())
     }
 
@@ -722,6 +785,7 @@ class DefaultTaskRunnerTest {
         val operations = mutableListOf<String>()
         val tapResults = ArrayDeque<CapabilityResult<Unit>>()
         val inputResults = ArrayDeque<CapabilityResult<InputTextSummary>>()
+        val screenshotResults = ArrayDeque<CapabilityResult<ScreenshotCapture>>()
         val waitResults = ArrayDeque<CapabilityResult<Unit>>()
         var waitDelayMs: Long = 0
 
@@ -774,6 +838,61 @@ class DefaultTaskRunnerTest {
             }
         }
 
+        override suspend fun captureScreenshot(request: ScreenshotCaptureRequest): CapabilityResult<ScreenshotCapture> {
+            operations += "captureScreenshot:${request.taskId}:${request.runId}:${request.stepId ?: "run"}:${request.attempt ?: 0}"
+            return if (screenshotResults.isEmpty()) {
+                CapabilityResult.Success(
+                    ScreenshotCapture(
+                        relativePath = buildArtifactRelativePath(request),
+                        mimeType = "image/png",
+                        fileSizeBytes = 2048L,
+                    ),
+                )
+            } else {
+                screenshotResults.removeFirst()
+            }
+        }
+
+        private fun buildArtifactRelativePath(request: ScreenshotCaptureRequest): String {
+            val taskAttempt = request.taskAttempt ?: 1
+            return if (request.stepId == null) {
+                buildString {
+                    append("diagnostics/screenshots/")
+                    append(request.taskId)
+                    append('/')
+                    append(request.runId)
+                    append('/')
+                    append("run")
+                    if (taskAttempt > 1) {
+                        append("-task")
+                        append(taskAttempt)
+                    }
+                    append(".png")
+                }
+            } else {
+                val stepId = request.stepId ?: error("stepId must be present for step artifact path")
+                val sanitizedStepId = stepId.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "artifact" }
+                val stepHash = stepId.hashCode().toUInt().toString(16)
+                buildString {
+                    append("diagnostics/screenshots/")
+                    append(request.taskId)
+                    append('/')
+                    append(request.runId)
+                    append('/')
+                    append(sanitizedStepId)
+                    append('-')
+                    append(stepHash)
+                    if (taskAttempt > 1) {
+                        append("-task")
+                        append(taskAttempt)
+                    }
+                    append("-attempt")
+                    append(request.attempt ?: 1)
+                    append(".png")
+                }
+            }
+        }
+
         override suspend fun waitForElement(
             selector: ElementSelector,
             state: WaitElementState,
@@ -810,6 +929,22 @@ class DefaultTaskRunnerTest {
         ?.jsonPrimitive
         ?.content
 
+    private fun StepRunRecord.artifactType(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["artifactType"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun StepRunRecord.artifactRelativePath(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["relativePath"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun StepRunRecord.artifactFileSizeBytes(): Long? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["fileSizeBytes"]
+        ?.jsonPrimitive
+        ?.content
+        ?.toLongOrNull()
+
     private fun StepRunRecord.artifactSensitiveContextActive(): Boolean? = Json.parseToJsonElement(artifactsJson)
         .jsonObject["sensitiveContextActive"]
         ?.jsonPrimitive
@@ -820,4 +955,57 @@ class DefaultTaskRunnerTest {
         .jsonObject["reason"]
         ?.jsonPrimitive
         ?.content
+
+    private fun com.plearn.appcontrol.data.model.TaskRunRecord.artifactType(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["artifactType"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun com.plearn.appcontrol.data.model.TaskRunRecord.artifactRelativePath(): String? = Json.parseToJsonElement(artifactsJson)
+        .jsonObject["relativePath"]
+        ?.jsonPrimitive
+        ?.content
+
+    private fun expectedRunArtifactPath(taskId: String = "smoke-task", runId: String, taskAttempt: Int = 1): String =
+        buildString {
+            append("diagnostics/screenshots/")
+            append(taskId)
+            append('/')
+            append(runId)
+            append('/')
+            append("run")
+            if (taskAttempt > 1) {
+                append("-task")
+                append(taskAttempt)
+            }
+            append(".png")
+        }
+
+    private fun expectedStepArtifactPath(
+        taskId: String = "smoke-task",
+        runId: String,
+        stepId: String,
+        taskAttempt: Int = 1,
+        stepAttempt: Int = 1,
+    ): String {
+        val sanitizedStepId = stepId.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "artifact" }
+        val stepHash = stepId.hashCode().toUInt().toString(16)
+        return buildString {
+            append("diagnostics/screenshots/")
+            append(taskId)
+            append('/')
+            append(runId)
+            append('/')
+            append(sanitizedStepId)
+            append('-')
+            append(stepHash)
+            if (taskAttempt > 1) {
+                append("-task")
+                append(taskAttempt)
+            }
+            append("-attempt")
+            append(stepAttempt)
+            append(".png")
+        }
+    }
 }

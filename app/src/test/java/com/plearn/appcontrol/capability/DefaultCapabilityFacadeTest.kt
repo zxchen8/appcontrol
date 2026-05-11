@@ -182,6 +182,17 @@ class DefaultCapabilityFacadeTest {
             operations += "input:${request.source}:${request.masked}"
             return CapabilityResult.Success(nextInputSummary)
         }
+
+        override suspend fun captureScreenshot(request: ScreenshotCaptureRequest): CapabilityResult<ScreenshotCapture> {
+            operations += "captureScreenshot:${request.taskId}:${request.runId}:${request.stepId ?: "run"}:${request.attempt ?: 0}"
+            return CapabilityResult.Success(
+                ScreenshotCapture(
+                    relativePath = "diagnostics/screenshots/${request.taskId}/${request.runId}.png",
+                    mimeType = "image/png",
+                    fileSizeBytes = 1024L,
+                ),
+            )
+        }
     }
 
     private class RecordingAccessibilityPort : AccessibilityPort {

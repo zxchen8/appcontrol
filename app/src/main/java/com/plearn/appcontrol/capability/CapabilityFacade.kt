@@ -9,6 +9,7 @@ interface CapabilityFacade {
     suspend fun tap(target: TapTarget): CapabilityResult<Unit>
     suspend fun swipe(request: SwipeRequest): CapabilityResult<Unit>
     suspend fun inputText(request: InputTextRequest): CapabilityResult<InputTextSummary>
+    suspend fun captureScreenshot(request: ScreenshotCaptureRequest): CapabilityResult<ScreenshotCapture>
     suspend fun waitForElement(
         selector: ElementSelector,
         state: WaitElementState,
@@ -57,6 +58,9 @@ class DefaultCapabilityFacade(
 
     override suspend fun inputText(request: InputTextRequest): CapabilityResult<InputTextSummary> =
         deviceControl.inputText(request)
+
+    override suspend fun captureScreenshot(request: ScreenshotCaptureRequest): CapabilityResult<ScreenshotCapture> =
+        deviceControl.captureScreenshot(request)
 
     override suspend fun waitForElement(
         selector: ElementSelector,
@@ -145,7 +149,22 @@ interface DeviceControlPort {
     suspend fun tap(point: ScreenPoint): CapabilityResult<Unit>
     suspend fun swipe(request: SwipeRequest): CapabilityResult<Unit>
     suspend fun inputText(request: InputTextRequest): CapabilityResult<InputTextSummary>
+    suspend fun captureScreenshot(request: ScreenshotCaptureRequest): CapabilityResult<ScreenshotCapture>
 }
+
+data class ScreenshotCaptureRequest(
+    val taskId: String,
+    val runId: String,
+    val stepId: String? = null,
+    val attempt: Int? = null,
+    val taskAttempt: Int? = null,
+)
+
+data class ScreenshotCapture(
+    val relativePath: String,
+    val mimeType: String,
+    val fileSizeBytes: Long,
+)
 
 interface AccessibilityPort {
     suspend fun tap(selector: ElementSelector): CapabilityResult<Unit>

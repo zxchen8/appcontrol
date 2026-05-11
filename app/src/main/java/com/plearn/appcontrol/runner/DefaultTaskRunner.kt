@@ -8,6 +8,7 @@ import com.plearn.appcontrol.capability.InputTextRequest
 import com.plearn.appcontrol.capability.InputTextSource
 import com.plearn.appcontrol.capability.ScreenPoint
 import com.plearn.appcontrol.capability.SelectorType
+import com.plearn.appcontrol.capability.ScreenshotCaptureRequest
 import com.plearn.appcontrol.capability.SwipeRequest
 import com.plearn.appcontrol.capability.TapTarget
 import com.plearn.appcontrol.capability.WaitElementState
@@ -97,7 +98,13 @@ class DefaultTaskRunner(
         )
 
         for (attempt in 1..maxAttempts) {
-            val attemptOutcome = executeAttempt(task = task, runId = runId, stepRuns = stepRuns, executionContext = executionContext)
+            val attemptOutcome = executeAttempt(
+                task = task,
+                runId = runId,
+                taskAttempt = attempt,
+                stepRuns = stepRuns,
+                executionContext = executionContext,
+            )
             if (attemptOutcome.success) {
                 return TaskTerminalOutcome(
                     status = TaskRunStatus.SUCCESS,
@@ -129,6 +136,7 @@ class DefaultTaskRunner(
     private suspend fun executeAttempt(
         task: TaskDefinition,
         runId: String,
+        taskAttempt: Int,
         stepRuns: MutableList<StepRunRecord>,
         executionContext: RunnerExecutionContext,
     ): AttemptOutcome {
@@ -138,6 +146,7 @@ class DefaultTaskRunner(
                     task = task,
                     step = step,
                     runId = runId,
+                    taskAttempt = taskAttempt,
                     stepRuns = stepRuns,
                     executionContext = executionContext,
                 )
@@ -167,6 +176,7 @@ class DefaultTaskRunner(
         task: TaskDefinition,
         step: TaskStep,
         runId: String,
+        taskAttempt: Int,
         stepRuns: MutableList<StepRunRecord>,
         executionContext: RunnerExecutionContext,
     ): StepOutcome {
@@ -219,6 +229,9 @@ class DefaultTaskRunner(
                         artifactsJson = buildFailureArtifactJson(
                             taskId = task.taskId,
                             runId = runId,
+                            stepId = step.id,
+                            stepAttempt = attempt,
+                            taskAttempt = taskAttempt,
                             diagnostics = task.diagnostics,
                             sensitiveContextActive = executionContext.sensitiveContextActive || stepUsesSensitiveInput,
                         ),
@@ -462,6 +475,9 @@ class DefaultTaskRunner(
     private suspend fun buildFailureArtifactJson(
         taskId: String,
         runId: String,
+        stepId: String? = null,
+        stepAttempt: Int? = null,
+        taskAttempt: Int? = null,
         diagnostics: DiagnosticsPolicy,
         sensitiveContextActive: Boolean,
     ): String {
@@ -487,12 +503,34 @@ class DefaultTaskRunner(
                 sensitiveContextActive = false,
             )
 
-            else -> DiagnosticArtifact(
-                artifactType = "screenshot_unavailable",
-                reason = RunnerDiagnosticArtifactReason.SCREENSHOT_CAPTURE_NOT_IMPLEMENTED,
-                captureRequested = true,
-                sensitiveContextActive = false,
-            )
+            else -> when (
+                val captureResult = capabilityFacade.captureScreenshot(
+                    ScreenshotCaptureRequest(
+                        taskId = taskId,
+                        runId = runId,
+                        stepId = stepId,
+                        attempt = stepAttempt,
+                        taskAttempt = taskAttempt,
+                    ),
+                )
+            ) {
+                is CapabilityResult.Success -> DiagnosticArtifact(
+                    artifactType = "screenshot",
+                    reason = null,
+                    captureRequested = true,
+                    sensitiveContextActive = false,
+                    relativePath = captureResult.value.relativePath,
+                    mimeType = captureResult.value.mimeType,
+                    fileSizeBytes = captureResult.value.fileSizeBytes,
+                )
+
+                is CapabilityResult.Failure -> DiagnosticArtifact(
+                    artifactType = "screenshot_unavailable",
+                    reason = RunnerDiagnosticArtifactReason.SCREENSHOT_CAPTURE_FAILED,
+                    captureRequested = true,
+                    sensitiveContextActive = false,
+                )
+            }
         }
         return artifact.toJson()
     }
@@ -592,6 +630,7 @@ class DefaultTaskRunner(
         return buildFailureArtifactJson(
             taskId = taskId,
             runId = runId,
+            taskAttempt = terminalOutcome.attemptCount,
             diagnostics = runDiagnostics,
             sensitiveContextActive = sensitiveContextActive,
         )
@@ -627,15 +666,21 @@ class DefaultTaskRunner(
 
     private data class DiagnosticArtifact(
         val artifactType: String,
-        val reason: String,
+        val reason: String?,
         val captureRequested: Boolean,
         val sensitiveContextActive: Boolean,
+        val relativePath: String? = null,
+        val mimeType: String? = null,
+        val fileSizeBytes: Long? = null,
     ) {
         fun toJson(): String = buildJsonObject {
             put("artifactType", artifactType)
-            put("reason", reason)
+            reason?.let { put("reason", it) }
             put("captureRequested", captureRequested)
             put("sensitiveContextActive", sensitiveContextActive)
+            relativePath?.let { put("relativePath", it) }
+            mimeType?.let { put("mimeType", it) }
+            fileSizeBytes?.let { put("fileSizeBytes", it) }
         }.toString()
     }
 
@@ -643,6 +688,7 @@ class DefaultTaskRunner(
         const val SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT = "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT"
         const val SCREENSHOT_CAPTURE_DISABLED_BY_POLICY = "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY"
         const val ARTIFACT_STORAGE_LIMIT_REACHED = "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED"
+        const val SCREENSHOT_CAPTURE_FAILED = "DIAG_SCREENSHOT_CAPTURE_FAILED"
         const val SCREENSHOT_CAPTURE_NOT_IMPLEMENTED = "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED"
     }
 

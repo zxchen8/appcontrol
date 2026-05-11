@@ -26,6 +26,9 @@ interface TaskRunDao {
     @Query("SELECT DISTINCT taskId FROM task_runs")
     suspend fun listTaskIds(): List<String>
 
+    @Query("SELECT taskId, runId FROM task_runs")
+    suspend fun listAllRunKeys(): List<TaskRunKey>
+
     @Query("SELECT COUNT(*) FROM task_runs")
     suspend fun countAll(): Int
 
@@ -97,3 +100,8 @@ interface TaskRunDao {
     )
     suspend fun deleteAllExceptMostRecent(taskId: String, retainCount: Int, protectedRunId: String)
 }
+
+data class TaskRunKey(
+    val taskId: String,
+    val runId: String,
+)

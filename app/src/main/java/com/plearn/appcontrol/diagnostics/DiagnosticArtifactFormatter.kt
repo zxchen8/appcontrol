@@ -18,6 +18,15 @@ internal fun String.toDiagnosticArtifactDisplayText(): String? {
 
     return buildString {
         append(artifactLabel)
+        structuredArtifact.relativePath?.let { relativePath ->
+            append(" | 路径=")
+            append(relativePath)
+        }
+        structuredArtifact.fileSizeBytes?.let { fileSizeBytes ->
+            append(" | 大小=")
+            append(fileSizeBytes)
+            append(" B")
+        }
         if (reasonLabel != null) {
             append(" | 原因=")
             append(reasonLabel)
@@ -43,6 +52,8 @@ private fun String.toStructuredArtifact(): StructuredArtifact? = try {
     val reason = jsonObject["reason"]?.jsonPrimitive?.contentOrNull
     val captureRequested = jsonObject["captureRequested"]?.jsonPrimitive?.booleanOrNull
     val sensitiveContextActive = jsonObject["sensitiveContextActive"]?.jsonPrimitive?.booleanOrNull
+    val relativePath = jsonObject["relativePath"]?.jsonPrimitive?.contentOrNull
+    val fileSizeBytes = jsonObject["fileSizeBytes"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
 
     if (artifactType == null && reason == null && captureRequested == null && sensitiveContextActive == null) {
         null
@@ -52,6 +63,8 @@ private fun String.toStructuredArtifact(): StructuredArtifact? = try {
             reason = reason,
             captureRequested = captureRequested,
             sensitiveContextActive = sensitiveContextActive,
+            relativePath = relativePath,
+            fileSizeBytes = fileSizeBytes,
             hasAdditionalFields = jsonObject.keys.any { it !in structuredArtifactKeys },
         )
     }
@@ -60,6 +73,7 @@ private fun String.toStructuredArtifact(): StructuredArtifact? = try {
 }
 
 private fun String?.toArtifactLabel(): String? = when (this) {
+    "screenshot" -> "截图已保存"
     "screenshot_suppressed" -> "截图已抑制"
     "screenshot_skipped" -> "截图已跳过"
     "screenshot_unavailable" -> "截图不可用"
@@ -71,6 +85,7 @@ private fun String?.toReasonLabel(): String? = when (this) {
     "DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT" -> "敏感内容，禁止采集 (DIAG_SCREENSHOT_SUPPRESSED_FOR_SENSITIVE_CONTENT)"
     "DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY" -> "诊断策略已关闭截图采集 (DIAG_SCREENSHOT_CAPTURE_DISABLED_BY_POLICY)"
     "DIAG_ARTIFACT_STORAGE_LIMIT_REACHED" -> "诊断产物存储预算已达上限，跳过截图采集 (DIAG_ARTIFACT_STORAGE_LIMIT_REACHED)"
+    "DIAG_SCREENSHOT_CAPTURE_FAILED" -> "截图采集失败 (DIAG_SCREENSHOT_CAPTURE_FAILED)"
     "DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED" -> "当前版本未实现截图采集 (DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED)"
     "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK" -> "阻断发生在首个动作步骤前，未采集截图 (DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_FIRST_ACTION_BLOCK)"
     "DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT" -> "执行前已达到会话超时条件，未采集截图 (DIAG_SCREENSHOT_NOT_CAPTURED_BEFORE_EXECUTION_TIMEOUT)"
@@ -84,6 +99,8 @@ private data class StructuredArtifact(
     val reason: String?,
     val captureRequested: Boolean?,
     val sensitiveContextActive: Boolean?,
+    val relativePath: String?,
+    val fileSizeBytes: Long?,
     val hasAdditionalFields: Boolean,
 )
 
@@ -92,4 +109,7 @@ private val structuredArtifactKeys = setOf(
     "reason",
     "captureRequested",
     "sensitiveContextActive",
+    "relativePath",
+    "fileSizeBytes",
+    "mimeType",
 )

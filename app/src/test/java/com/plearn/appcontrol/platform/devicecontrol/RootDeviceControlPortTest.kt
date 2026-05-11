@@ -8,12 +8,14 @@ import com.plearn.appcontrol.capability.InputTextSummary
 import com.plearn.appcontrol.capability.InputTextSource
 import com.plearn.appcontrol.capability.ScreenPoint
 import com.plearn.appcontrol.capability.SelectorType
+import com.plearn.appcontrol.capability.ScreenshotCaptureRequest
 import com.plearn.appcontrol.capability.SwipeRequest
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 class RootDeviceControlPortTest {
     @Test
@@ -159,13 +161,55 @@ class RootDeviceControlPortTest {
         assertEquals(emptyList<String>(), shell.commands)
     }
 
+    @Test
+    fun shouldCaptureScreenshotIntoDiagnosticsDirectoryAndReturnRelativePath() = runBlocking {
+        val screenshotRootDir = Files.createTempDirectory("root-device-control-shot").toFile()
+        val expectedFile = screenshotRootDir.resolve("task-a/run-a/step-login-${"step-login".hashCode().toUInt().toString(16)}-attempt1.png")
+        val shell = RecordingRootShellPort(
+            onCommand = { command ->
+                if (command.startsWith("screencap -p ")) {
+                    expectedFile.parentFile?.mkdirs()
+                    expectedFile.writeBytes(ByteArray(32) { 1 })
+                }
+            },
+        )
+        val port = RootDeviceControlPort(
+            shell = shell,
+            screenshotRootDir = screenshotRootDir,
+        )
+
+        val result = port.captureScreenshot(
+            ScreenshotCaptureRequest(
+                taskId = "task-a",
+                runId = "run-a",
+                stepId = "step-login",
+                attempt = 1,
+            ),
+        )
+
+        assertTrue(result is CapabilityResult.Success)
+        val screenshot = (result as CapabilityResult.Success).value
+        assertEquals("diagnostics/screenshots/task-a/run-a/step-login-${"step-login".hashCode().toUInt().toString(16)}-attempt1.png", screenshot.relativePath)
+        assertEquals("image/png", screenshot.mimeType)
+        assertEquals(32L, screenshot.fileSizeBytes)
+        assertEquals(
+            listOf("screencap -p '${expectedFile.absolutePath}'"),
+            shell.commands,
+        )
+
+        screenshotRootDir.deleteRecursively()
+        Unit
+    }
+
     private class RecordingRootShellPort(
         private val nextResult: ShellCommandResult = ShellCommandResult(exitCode = 0),
+        private val onCommand: ((String) -> Unit)? = null,
     ) : RootShellPort {
         val commands = mutableListOf<String>()
 
         override suspend fun run(command: String): ShellCommandResult {
             commands += command
+            onCommand?.invoke(command)
             return nextResult
         }
     }
