@@ -5,6 +5,7 @@ import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
 import com.plearn.appcontrol.data.repository.RunRecordRepository
+import com.plearn.appcontrol.diagnostics.toDiagnosticEventDisplayText
 import com.plearn.appcontrol.data.repository.SessionRepository
 import com.plearn.appcontrol.data.repository.TaskRepository
 import com.plearn.appcontrol.diagnostics.toDiagnosticArtifactDisplayText
@@ -38,6 +39,7 @@ data class TaskMonitoringDetailSnapshot(
     val runningSession: RunningSessionSummary?,
     val recentRuns: List<RecentRunSummary>,
     val selectedRun: RecentRunSummary?,
+    val recentDiagnosticsEvents: List<String>,
     val failureContext: TaskFailureContextSummary?,
     val stepRuns: List<StepRunRecord>,
 )
@@ -66,6 +68,12 @@ class TaskMonitoringDetailService @Inject constructor(
             runRecordRepository.findStepRuns(selectedRun.runId)
         }
         val diagnostics = parser.parse(definition.rawJson).task?.diagnostics?.toSummary() ?: DiagnosticsPolicy().toSummary()
+        val recentDiagnosticsEvents = runRecordRepository.listRecentDiagnosticsEvents(
+            taskId = taskId,
+            limit = DEFAULT_RECENT_DIAGNOSTICS_EVENT_LIMIT,
+            runId = selectedRun?.runId,
+        )
+            .mapNotNull { event -> event.toDiagnosticEventDisplayText() }
         val failureContext = buildFailureContext(selectedRun, stepRuns, diagnostics)
 
         return TaskMonitoringDetailSnapshot(
@@ -75,6 +83,7 @@ class TaskMonitoringDetailService @Inject constructor(
             runningSession = runningSession,
             recentRuns = recentRuns,
             selectedRun = selectedRun,
+            recentDiagnosticsEvents = recentDiagnosticsEvents,
             failureContext = failureContext,
             stepRuns = stepRuns,
         )
@@ -205,5 +214,6 @@ class TaskMonitoringDetailService @Inject constructor(
 
     private companion object {
         const val DEFAULT_RECENT_RUN_LIMIT = 10
+        const val DEFAULT_RECENT_DIAGNOSTICS_EVENT_LIMIT = 5
     }
 }

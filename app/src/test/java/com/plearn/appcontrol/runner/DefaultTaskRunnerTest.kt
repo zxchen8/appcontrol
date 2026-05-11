@@ -802,7 +802,7 @@ class DefaultTaskRunnerTest {
     }
 
     private val denyAllDiagnosticsArtifactCaptureGate = object : DiagnosticsArtifactCaptureGate {
-        override suspend fun canCaptureFailureArtifact(): Boolean = false
+        override suspend fun canCaptureFailureArtifact(taskId: String?, runId: String?): Boolean = false
     }
 
     private fun StepRunRecord.artifactReason(): String? = Json.parseToJsonElement(artifactsJson)

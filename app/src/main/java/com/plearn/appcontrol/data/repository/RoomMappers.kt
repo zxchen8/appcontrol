@@ -6,6 +6,7 @@ import com.plearn.appcontrol.data.local.entity.CredentialSecretEntity
 import com.plearn.appcontrol.data.local.entity.CredentialSetEntity
 import com.plearn.appcontrol.data.local.entity.CredentialSetItemEntity
 import com.plearn.appcontrol.data.local.entity.CredentialSetWithItems
+import com.plearn.appcontrol.data.local.entity.DiagnosticsEventEntity
 import com.plearn.appcontrol.data.local.entity.StepRunEntity
 import com.plearn.appcontrol.data.local.entity.TaskDefinitionEntity
 import com.plearn.appcontrol.data.local.entity.TaskRunEntity
@@ -15,6 +16,7 @@ import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.CredentialSecretRecord
 import com.plearn.appcontrol.data.model.CredentialSetItemRecord
 import com.plearn.appcontrol.data.model.CredentialSetRecord
+import com.plearn.appcontrol.data.model.DiagnosticsEventRecord
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
@@ -212,4 +214,22 @@ internal fun StepRunRecord.toEntity(): StepRunEntity = StepRunEntity(
     errorCode = errorCode,
     message = message,
     artifactsJson = artifactsJson,
+)
+
+internal fun DiagnosticsEventEntity.toRecord(): DiagnosticsEventRecord = DiagnosticsEventRecord(
+    id = id,
+    taskId = taskId,
+    runId = runId,
+    createdAt = createdAt,
+    eventType = eventType,
+    payloadJson = payloadJson,
+)
+
+internal fun DiagnosticsEventRecord.toEntity(): DiagnosticsEventEntity = DiagnosticsEventEntity(
+    id = id,
+    taskId = taskId,
+    runId = runId,
+    createdAt = createdAt,
+    eventType = eventType,
+    payloadJson = payloadJson,
 )

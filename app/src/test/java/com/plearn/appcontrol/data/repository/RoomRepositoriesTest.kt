@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.plearn.appcontrol.data.local.AppControlDatabase
+import com.plearn.appcontrol.data.local.entity.DiagnosticsEventEntity
 import com.plearn.appcontrol.data.model.ContinuousSessionRecord
 import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.CredentialSetItemRecord
 import com.plearn.appcontrol.data.model.CredentialSetRecord
+import com.plearn.appcontrol.data.model.DiagnosticsEventRecord
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
@@ -779,7 +781,7 @@ class RoomRepositoriesTest {
             retentionPolicy = DiagnosticsRetentionPolicy(
                 maxRunsPerTask = 10,
                 maxAgeMs = 10_000L,
-                maxStorageBytes = 300L,
+                maxStorageBytes = 400L,
                 captureHighWatermarkBytes = 80L,
             ),
             nowMsProvider = { 1_000L },
@@ -830,10 +832,150 @@ class RoomRepositoriesTest {
             ),
         )
 
-        assertFalse(budgetRepository.canCaptureFailureArtifact())
+        assertFalse(budgetRepository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-budget-heavy"))
         assertEquals(1, logger.captureDeniedEvents.size)
         assertEquals("capture_gate", logger.captureDeniedEvents.single().trigger)
         assertTrue(logger.captureDeniedEvents.single().usedBytes >= 80L)
+        val events = budgetRepository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 5)
+        assertEquals(1, events.size)
+        assertEquals("capture_gate_denied", events.single().eventType)
+        assertEquals("task-run-a", events.single().taskId)
+        assertEquals("run-budget-heavy", events.single().runId)
+        assertEquals(true, events.single().payloadJson.contains("\"trigger\":\"capture_gate\""))
+        assertEquals(true, events.single().payloadJson.contains("\"maxStorageBytes\":400"))
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldCollapseRepeatedCaptureGateDenialsForSameRun() = runBlocking {
+        val budgetRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxEventsPerTask = 2,
+                maxAgeMs = 10_000L,
+                maxStorageBytes = 400L,
+                captureHighWatermarkBytes = 80L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        budgetRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-budget-heavy",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 900,
+                finishedAt = 950,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = "heavy diagnostics payload",
+                artifactsJson = "{}",
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-budget-heavy",
+                    stepId = "step-heavy",
+                    status = "failed",
+                    startedAt = 905,
+                    finishedAt = 910,
+                    durationMs = 5,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "diagnostics message",
+                    artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"payload\":\"${"x".repeat(32)}\"}",
+                ),
+            ),
+        )
+
+        assertFalse(budgetRepository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-budget-heavy"))
+        assertFalse(budgetRepository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-budget-heavy"))
+
+        assertEquals(
+            1,
+            budgetRepository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 10)
+                .count { it.taskId == "task-run-a" && it.runId == "run-budget-heavy" && it.eventType == "capture_gate_denied" },
+        )
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldCountDiagnosticsEventsTowardsCaptureWatermark() = runBlocking {
+        val budgetRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+                maxStorageBytes = 300L,
+                captureHighWatermarkBytes = 80L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        database.diagnosticsEventDao().insert(
+            DiagnosticsEventEntity(
+                taskId = null,
+                runId = null,
+                createdAt = 950L,
+                eventType = "cleanup",
+                payloadJson = "{\"trigger\":\"startup\",\"deletedRunCount\":1,\"beforeBytes\":260,\"afterBytes\":240,\"maxStorageBytes\":300,\"captureHighWatermarkBytes\":80,\"padding\":\"${"x".repeat(160)}\"}",
+            ),
+        )
+
+        assertFalse(budgetRepository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-with-event-pressure"))
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldPrioritizeSelectedRunEventsOverNewerGlobalCleanupEvents() = runBlocking {
+        val repository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            nowMsProvider = { 1_000L },
+        )
+        repeat(5) { index ->
+            database.diagnosticsEventDao().insert(
+                DiagnosticsEventEntity(
+                    taskId = null,
+                    runId = null,
+                    createdAt = 1_000L - index,
+                    eventType = "cleanup",
+                    payloadJson = "{\"trigger\":\"startup\",\"deletedRunCount\":1,\"beforeBytes\":100,\"afterBytes\":50,\"maxStorageBytes\":536870912,\"captureHighWatermarkBytes\":483183820}",
+                ),
+            )
+        }
+        database.diagnosticsEventDao().insert(
+            DiagnosticsEventEntity(
+                taskId = "task-run-a",
+                runId = "run-selected",
+                createdAt = 995L,
+                eventType = "capture_gate_denied",
+                payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":300,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":400}",
+            ),
+        )
+
+        val events = repository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 5, runId = "run-selected")
+
+        assertEquals(5, events.size)
+        assertEquals("capture_gate_denied", events.first().eventType)
+        assertEquals("run-selected", events.first().runId)
     }
 
     @Test
@@ -858,8 +1000,8 @@ class RoomRepositoriesTest {
             retentionPolicy = DiagnosticsRetentionPolicy(
                 maxRunsPerTask = 10,
                 maxAgeMs = 10_000L,
-                maxStorageBytes = 80L,
-                captureHighWatermarkBytes = 80L,
+                maxStorageBytes = 260L,
+                captureHighWatermarkBytes = 220L,
             ),
             nowMsProvider = { 1_000L },
             retentionLogger = logger,
@@ -929,11 +1071,144 @@ class RoomRepositoriesTest {
             stepRuns = emptyList(),
         )
 
-        assertTrue(budgetRepository.canCaptureFailureArtifact())
+        assertTrue(budgetRepository.canCaptureFailureArtifact(taskId = "task-run-a", runId = "run-recent-light"))
         assertEquals(listOf("run-recent-light"), budgetRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
         assertEquals(1, logger.cleanupEvents.size)
         assertEquals("capture_gate", logger.cleanupEvents.single().trigger)
         assertEquals(1, logger.cleanupEvents.single().deletedRunCount)
+        val events = budgetRepository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 5)
+        assertEquals(1, events.size)
+        assertEquals("cleanup", events.single().eventType)
+        assertEquals("task-run-a", events.single().taskId)
+        assertEquals("run-recent-light", events.single().runId)
+        assertEquals(true, events.single().payloadJson.contains("\"trigger\":\"capture_gate\""))
+        assertEquals(true, events.single().payloadJson.contains("\"deletedRunCount\":1"))
+        assertEquals(true, events.single().payloadJson.contains("\"maxStorageBytes\":260"))
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldDeleteRunScopedDiagnosticsEventsWhenRunIsPruned() = runBlocking {
+        val seedingRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        val startupRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 500L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-old-pruned",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 120,
+                durationMs = 20,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+        database.diagnosticsEventDao().insert(
+            DiagnosticsEventEntity(
+                taskId = "task-run-a",
+                runId = "run-old-pruned",
+                createdAt = 100L,
+                eventType = "capture_gate_denied",
+                payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":300,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":400}",
+            ),
+        )
+
+        startupRepository.pruneRetainedRunsAtStartup()
+
+        assertEquals(
+            emptyList<DiagnosticsEventRecord>(),
+            startupRepository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 10, runId = "run-old-pruned")
+                .filter { it.runId == "run-old-pruned" },
+        )
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldPruneDiagnosticsEventsBeyondPerTaskLimit() = runBlocking {
+        val startupRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 1,
+                maxEventsPerTask = 1,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+        database.diagnosticsEventDao().insert(
+            DiagnosticsEventEntity(
+                taskId = "task-run-a",
+                runId = null,
+                createdAt = 100L,
+                eventType = "capture_gate_denied",
+                payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":200,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":400}",
+            ),
+        )
+        database.diagnosticsEventDao().insert(
+            DiagnosticsEventEntity(
+                taskId = "task-run-a",
+                runId = null,
+                createdAt = 200L,
+                eventType = "capture_gate_denied",
+                payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":220,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":400}",
+            ),
+        )
+
+        startupRepository.pruneRetainedRunsAtStartup()
+
+        assertEquals(
+            listOf("{\"trigger\":\"capture_gate\",\"usedBytes\":220,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":400}"),
+            startupRepository.listRecentDiagnosticsEvents(taskId = "task-run-a", limit = 10)
+                .filter { it.taskId == "task-run-a" }
+                .map { it.payloadJson },
+        )
     }
 
     @Test

@@ -48,3 +48,12 @@ data class StepRunRecord(
     val message: String?,
     val artifactsJson: String,
 )
+
+data class DiagnosticsEventRecord(
+    val id: Long = 0,
+    val taskId: String?,
+    val runId: String?,
+    val createdAt: Long,
+    val eventType: String,
+    val payloadJson: String,
+)

@@ -81,8 +81,8 @@ object CapabilityModule {
     fun provideDiagnosticsArtifactCaptureGate(
         runRecordRepository: RunRecordRepository,
     ): DiagnosticsArtifactCaptureGate = object : DiagnosticsArtifactCaptureGate {
-        override suspend fun canCaptureFailureArtifact(): Boolean =
-            runRecordRepository.canCaptureFailureArtifact()
+        override suspend fun canCaptureFailureArtifact(taskId: String?, runId: String?): Boolean =
+            runRecordRepository.canCaptureFailureArtifact(taskId = taskId, runId = runId)
     }
 
     @Provides

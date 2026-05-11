@@ -1,6 +1,7 @@
 package com.plearn.appcontrol.appservice
 
 import com.plearn.appcontrol.data.model.ContinuousSessionRecord
+import com.plearn.appcontrol.data.model.DiagnosticsEventRecord
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
@@ -347,6 +348,128 @@ class TaskMonitoringDetailServiceTest {
     }
 
     @Test
+    fun shouldExposeRecentDiagnosticsEventsForSelectedTask() = runBlocking {
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun)),
+                stepRunsByRunId = mapOf("run-newer" to listOf(stepRun1, stepRun2)),
+                diagnosticsEventsByTaskId = mapOf(
+                    "task-a" to listOf(
+                        DiagnosticsEventRecord(
+                            id = 2L,
+                            taskId = "task-a",
+                            runId = "run-newer",
+                            createdAt = 2_055L,
+                            eventType = "capture_gate_denied",
+                            payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":300,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":300}",
+                        ),
+                        DiagnosticsEventRecord(
+                            id = 1L,
+                            taskId = null,
+                            runId = null,
+                            createdAt = 2_040L,
+                            eventType = "cleanup",
+                            payloadJson = "{\"trigger\":\"startup\",\"deletedRunCount\":2,\"beforeBytes\":512,\"afterBytes\":128,\"maxStorageBytes\":536870912,\"captureHighWatermarkBytes\":483183820}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-newer", recentRunLimit = 5)
+
+        assertEquals(
+            listOf(
+                "diag=截图采集已拒绝 | 触发=capture_gate | 已用=300B | 水位=80B | 预算=300B",
+                "diag=诊断产物已清理 | 触发=startup | 删除运行=2 | 存储=512B->128B",
+            ),
+            snapshot?.recentDiagnosticsEvents,
+        )
+    }
+
+    @Test
+    fun shouldPreferSelectedRunDiagnosticsEventsBeforeApplyingLimit() = runBlocking {
+        val historicalFailedRun = olderRun.copy(
+            runId = "run-older-failed",
+            status = "failed",
+            errorCode = "RUNNER_STEP_FAILED",
+            message = "older failed run",
+        )
+        val service = TaskMonitoringDetailService(
+            taskRepository = FakeTaskRepository(taskDefinitionRecord, taskScheduleStateRecord),
+            runRecordRepository = FakeRunRecordRepository(
+                recentRunsByTaskId = mapOf("task-a" to listOf(newerRun, historicalFailedRun)),
+                stepRunsByRunId = mapOf(
+                    "run-newer" to listOf(stepRun1, stepRun2),
+                    "run-older-failed" to listOf(stepRun1.copy(runId = "run-older-failed"), stepRun2.copy(runId = "run-older-failed")),
+                ),
+                diagnosticsEventsByTaskId = mapOf(
+                    "task-a" to listOf(
+                        DiagnosticsEventRecord(
+                            id = 6L,
+                            taskId = "task-a",
+                            runId = "run-newer",
+                            createdAt = 2_060L,
+                            eventType = "capture_gate_denied",
+                            payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":301,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":300}",
+                        ),
+                        DiagnosticsEventRecord(
+                            id = 5L,
+                            taskId = "task-a",
+                            runId = "run-newer",
+                            createdAt = 2_059L,
+                            eventType = "capture_gate_denied",
+                            payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":300,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":300}",
+                        ),
+                        DiagnosticsEventRecord(
+                            id = 4L,
+                            taskId = "task-a",
+                            runId = "run-newer",
+                            createdAt = 2_058L,
+                            eventType = "capture_gate_denied",
+                            payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":299,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":300}",
+                        ),
+                        DiagnosticsEventRecord(
+                            id = 3L,
+                            taskId = "task-a",
+                            runId = "run-newer",
+                            createdAt = 2_057L,
+                            eventType = "capture_gate_denied",
+                            payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":298,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":300}",
+                        ),
+                        DiagnosticsEventRecord(
+                            id = 2L,
+                            taskId = "task-a",
+                            runId = "run-newer",
+                            createdAt = 2_056L,
+                            eventType = "capture_gate_denied",
+                            payloadJson = "{\"trigger\":\"capture_gate\",\"usedBytes\":297,\"captureHighWatermarkBytes\":80,\"maxStorageBytes\":300}",
+                        ),
+                        DiagnosticsEventRecord(
+                            id = 1L,
+                            taskId = "task-a",
+                            runId = "run-older-failed",
+                            createdAt = 2_055L,
+                            eventType = "cleanup",
+                            payloadJson = "{\"trigger\":\"record_task_run\",\"deletedRunCount\":1,\"beforeBytes\":512,\"afterBytes\":256,\"maxStorageBytes\":536870912,\"captureHighWatermarkBytes\":483183820}",
+                        ),
+                    ),
+                ),
+            ),
+            sessionRepository = FakeSessionRepository(runningSession),
+        )
+
+        val snapshot = service.loadTaskDetail(taskId = "task-a", selectedRunId = "run-older-failed", recentRunLimit = 5)
+
+        assertEquals(
+            listOf("diag=诊断产物已清理 | 触发=record_task_run | 删除运行=1 | 存储=512B->256B"),
+            snapshot?.recentDiagnosticsEvents,
+        )
+    }
+
+    @Test
     fun shouldNotTreatBlockedRunWithRecordedStepsAsPreActionBlock() = runBlocking {
         val blockedRun = newerRun.copy(
             runId = "run-blocked-with-steps",
@@ -623,6 +746,7 @@ class TaskMonitoringDetailServiceTest {
     private class FakeRunRecordRepository(
         private val recentRunsByTaskId: Map<String, List<TaskRunRecord>> = emptyMap(),
         private val stepRunsByRunId: Map<String, List<StepRunRecord>> = emptyMap(),
+        private val diagnosticsEventsByTaskId: Map<String, List<DiagnosticsEventRecord>> = emptyMap(),
     ) : RunRecordRepository {
         override suspend fun upsertTaskRun(taskRun: TaskRunRecord) = Unit
 
@@ -643,6 +767,12 @@ class TaskMonitoringDetailServiceTest {
         override suspend fun insertStepRuns(stepRuns: List<StepRunRecord>) = Unit
 
         override suspend fun findStepRuns(runId: String): List<StepRunRecord> = stepRunsByRunId[runId].orEmpty()
+
+        override suspend fun listRecentDiagnosticsEvents(taskId: String, limit: Int, runId: String?): List<DiagnosticsEventRecord> =
+            diagnosticsEventsByTaskId[taskId]
+                .orEmpty()
+                .filter { event -> runId == null || event.runId == null || event.runId == runId }
+                .take(limit.coerceAtLeast(0))
     }
 
     private class FakeSessionRepository(

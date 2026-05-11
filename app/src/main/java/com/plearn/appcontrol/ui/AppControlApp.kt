@@ -1136,6 +1136,15 @@ private fun TaskMonitoringDetailCard(
                         text = "captureFailure=${snapshot.diagnostics.captureScreenshotOnFailure} | captureStepFailure=${snapshot.diagnostics.captureScreenshotOnStepFailure} | logLevel=${snapshot.diagnostics.logLevel}",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    if (snapshot.recentDiagnosticsEvents.isNotEmpty()) {
+                        Text(text = "最近诊断事件", style = MaterialTheme.typography.titleSmall)
+                        snapshot.recentDiagnosticsEvents.forEach { event ->
+                            Text(
+                                text = event,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                     Text(text = "失败上下文", style = MaterialTheme.typography.titleSmall)
                     if (snapshot.failureContext == null) {
                         Text(text = "当前选中运行没有失败上下文。", style = MaterialTheme.typography.bodyMedium)

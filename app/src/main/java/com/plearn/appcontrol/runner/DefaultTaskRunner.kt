@@ -217,6 +217,8 @@ class DefaultTaskRunner(
                         errorCode = execution.errorCode,
                         message = execution.message,
                         artifactsJson = buildFailureArtifactJson(
+                            taskId = task.taskId,
+                            runId = runId,
                             diagnostics = task.diagnostics,
                             sensitiveContextActive = executionContext.sensitiveContextActive || stepUsesSensitiveInput,
                         ),
@@ -458,6 +460,8 @@ class DefaultTaskRunner(
     }
 
     private suspend fun buildFailureArtifactJson(
+        taskId: String,
+        runId: String,
         diagnostics: DiagnosticsPolicy,
         sensitiveContextActive: Boolean,
     ): String {
@@ -476,7 +480,7 @@ class DefaultTaskRunner(
                 sensitiveContextActive = true,
             )
 
-            !diagnosticsArtifactCaptureGate.canCaptureFailureArtifact() -> DiagnosticArtifact(
+            !diagnosticsArtifactCaptureGate.canCaptureFailureArtifact(taskId = taskId, runId = runId) -> DiagnosticArtifact(
                 artifactType = "screenshot_skipped",
                 reason = RunnerDiagnosticArtifactReason.ARTIFACT_STORAGE_LIMIT_REACHED,
                 captureRequested = true,
@@ -542,6 +546,8 @@ class DefaultTaskRunner(
                 errorCode = terminalOutcome.errorCode,
                 message = terminalOutcome.message,
                 artifactsJson = buildTaskFailureArtifactJson(
+                    taskId = task.taskId,
+                    runId = runId,
                     diagnostics = task.diagnostics,
                     terminalOutcome = terminalOutcome,
                     stepRuns = stepRuns,
@@ -554,6 +560,8 @@ class DefaultTaskRunner(
     }
 
     private suspend fun buildTaskFailureArtifactJson(
+        taskId: String,
+        runId: String,
         diagnostics: DiagnosticsPolicy,
         terminalOutcome: TaskTerminalOutcome,
         stepRuns: List<StepRunRecord>,
@@ -582,6 +590,8 @@ class DefaultTaskRunner(
             logLevel = diagnostics.logLevel,
         )
         return buildFailureArtifactJson(
+            taskId = taskId,
+            runId = runId,
             diagnostics = runDiagnostics,
             sensitiveContextActive = sensitiveContextActive,
         )

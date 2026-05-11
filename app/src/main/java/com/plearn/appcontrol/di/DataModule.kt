@@ -7,6 +7,7 @@ import com.plearn.appcontrol.data.local.AppControlDatabase
 import com.plearn.appcontrol.data.local.dao.ContinuousSessionDao
 import com.plearn.appcontrol.data.local.dao.CredentialProfileDao
 import com.plearn.appcontrol.data.local.dao.CredentialSetDao
+import com.plearn.appcontrol.data.local.dao.DiagnosticsEventDao
 import com.plearn.appcontrol.data.local.dao.StepRunDao
 import com.plearn.appcontrol.data.local.dao.TaskDefinitionDao
 import com.plearn.appcontrol.data.local.dao.TaskRunDao
@@ -35,7 +36,7 @@ object DataModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppControlDatabase =
         Room.databaseBuilder(context, AppControlDatabase::class.java, DATABASE_NAME)
-            .addMigrations(AppControlDatabase.MIGRATION_1_2)
+            .addMigrations(AppControlDatabase.MIGRATION_1_2, AppControlDatabase.MIGRATION_2_3)
             .build()
 
     @Provides
@@ -58,6 +59,9 @@ object DataModule {
 
     @Provides
     fun provideStepRunDao(database: AppControlDatabase): StepRunDao = database.stepRunDao()
+
+    @Provides
+    fun provideDiagnosticsEventDao(database: AppControlDatabase): DiagnosticsEventDao = database.diagnosticsEventDao()
 
     @Provides
     @Singleton
@@ -84,7 +88,8 @@ object DataModule {
         database: AppControlDatabase,
         taskRunDao: TaskRunDao,
         stepRunDao: StepRunDao,
-    ): RoomRunRecordRepository = RoomRunRecordRepository(database, taskRunDao, stepRunDao)
+        diagnosticsEventDao: DiagnosticsEventDao,
+    ): RoomRunRecordRepository = RoomRunRecordRepository(database, taskRunDao, stepRunDao, diagnosticsEventDao = diagnosticsEventDao)
 
     @Provides
     @Singleton

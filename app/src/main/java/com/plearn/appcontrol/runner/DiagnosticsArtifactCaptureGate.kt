@@ -1,9 +1,9 @@
 package com.plearn.appcontrol.runner
 
 interface DiagnosticsArtifactCaptureGate {
-    suspend fun canCaptureFailureArtifact(): Boolean
+    suspend fun canCaptureFailureArtifact(taskId: String? = null, runId: String? = null): Boolean
 }
 
 object AllowAllDiagnosticsArtifactCaptureGate : DiagnosticsArtifactCaptureGate {
-    override suspend fun canCaptureFailureArtifact(): Boolean = true
+    override suspend fun canCaptureFailureArtifact(taskId: String?, runId: String?): Boolean = true
 }
