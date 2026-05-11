@@ -8,10 +8,12 @@ import com.plearn.appcontrol.runner.RunTriggerType
 import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunStatus
 import com.plearn.appcontrol.runner.TaskRunner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class DeviceValidationServiceTest {
@@ -72,6 +74,92 @@ class DeviceValidationServiceTest {
     }
 
     @Test
+    fun shouldReturnStructuredErrorWhenSmokeCheckRunnerThrowsException() = runBlocking {
+        val runner = RecordingTaskRunner(shouldThrow = true)
+        val service = DeviceValidationService(
+            environmentInspector = FixedDeviceEnvironmentInspector(
+                DeviceEnvironmentReport(
+                    rootReady = true,
+                    accessibilityEnabled = true,
+                    accessibilityConnected = true,
+                    foregroundPackageName = "com.android.launcher3",
+                ),
+            ),
+            taskRunner = runner,
+        )
+
+        val result = service.runTapSmokeCheck(
+            TapSmokeCheckRequest(
+                packageName = "com.example.target",
+                selector = ElementSelector(SelectorType.TEXT, "登录"),
+            ),
+        )
+
+        assertEquals(1, runner.invocationCount)
+        assertNull(result.execution)
+        assertEquals(DeviceValidationErrorCode.SMOKE_CHECK_EXECUTION_EXCEPTION, result.errorCode)
+        assertEquals("Smoke check failed with an execution exception.", result.message)
+        assertEquals("com.android.launcher3", result.environment.foregroundPackageName)
+    }
+
+    @Test
+    fun shouldPropagateCancellationWhenSmokeCheckRunnerIsCancelled() = runBlocking {
+        val runner = RecordingTaskRunner(shouldCancel = true)
+        val service = DeviceValidationService(
+            environmentInspector = FixedDeviceEnvironmentInspector(
+                DeviceEnvironmentReport(
+                    rootReady = true,
+                    accessibilityEnabled = true,
+                    accessibilityConnected = true,
+                    foregroundPackageName = "com.android.launcher3",
+                ),
+            ),
+            taskRunner = runner,
+        )
+
+        try {
+            service.runTapSmokeCheck(
+                TapSmokeCheckRequest(
+                    packageName = "com.example.target",
+                    selector = ElementSelector(SelectorType.TEXT, "登录"),
+                ),
+            )
+            fail("Expected cancellation to be propagated.")
+        } catch (error: CancellationException) {
+            assertEquals("runner validation cancelled", error.message)
+        }
+
+        assertEquals(1, runner.invocationCount)
+    }
+
+    @Test
+    fun shouldReturnCancelledExecutionWhenSmokeCheckRunnerReportsCancelledResult() = runBlocking {
+        val runner = RecordingTaskRunner(resultStatus = TaskRunStatus.CANCELLED)
+        val service = DeviceValidationService(
+            environmentInspector = FixedDeviceEnvironmentInspector(
+                DeviceEnvironmentReport(
+                    rootReady = true,
+                    accessibilityEnabled = true,
+                    accessibilityConnected = true,
+                    foregroundPackageName = "com.android.launcher3",
+                ),
+            ),
+            taskRunner = runner,
+        )
+
+        val result = service.runTapSmokeCheck(
+            TapSmokeCheckRequest(
+                packageName = "com.example.target",
+                selector = ElementSelector(SelectorType.TEXT, "登录"),
+            ),
+        )
+
+        assertEquals(1, runner.invocationCount)
+        assertEquals(TaskRunStatus.CANCELLED, result.execution?.taskRun?.status)
+        assertNull(result.errorCode)
+    }
+
+    @Test
     fun shouldInspectRootAccessibilityAndForegroundPackage() = runBlocking {
         val inspector = DefaultDeviceEnvironmentInspector(
             rootShellPort = FixedRootShellPort(
@@ -95,7 +183,11 @@ class DeviceValidationServiceTest {
         assertEquals("com.example.target", result.foregroundPackageName)
     }
 
-    private class RecordingTaskRunner : TaskRunner {
+    private class RecordingTaskRunner(
+        private val shouldThrow: Boolean = false,
+        private val shouldCancel: Boolean = false,
+        private val resultStatus: String = TaskRunStatus.SUCCESS,
+    ) : TaskRunner {
         var invocationCount: Int = 0
         var lastTask: TaskDefinition? = null
         var lastTriggerType: String? = null
@@ -104,6 +196,12 @@ class DeviceValidationServiceTest {
             invocationCount += 1
             lastTask = task
             lastTriggerType = triggerType
+            if (shouldCancel) {
+                throw CancellationException("runner validation cancelled")
+            }
+            if (shouldThrow) {
+                throw IllegalStateException("runner validation failed")
+            }
             return TaskExecutionResult(
                 taskRun = TaskRunRecord(
                     runId = "run-smoke",
@@ -113,7 +211,7 @@ class DeviceValidationServiceTest {
                     credentialSetId = null,
                     credentialProfileId = null,
                     credentialAlias = null,
-                    status = TaskRunStatus.SUCCESS,
+                    status = resultStatus,
                     startedAt = 1L,
                     finishedAt = 2L,
                     durationMs = 1L,

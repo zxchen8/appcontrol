@@ -15,6 +15,7 @@ import com.plearn.appcontrol.dsl.TaskTrigger
 import com.plearn.appcontrol.runner.RunTriggerType
 import com.plearn.appcontrol.runner.TaskExecutionResult
 import com.plearn.appcontrol.runner.TaskRunner
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -37,6 +38,7 @@ object DeviceValidationErrorCode {
     const val ROOT_NOT_READY = "ROOT_NOT_READY"
     const val ACCESSIBILITY_NOT_ENABLED = "ACCESSIBILITY_NOT_ENABLED"
     const val ACCESSIBILITY_NOT_CONNECTED = "ACCESSIBILITY_NOT_CONNECTED"
+    const val SMOKE_CHECK_EXECUTION_EXCEPTION = "SMOKE_CHECK_EXECUTION_EXCEPTION"
 }
 
 @Singleton
@@ -73,13 +75,25 @@ class DeviceValidationService @Inject constructor(
             )
         }
 
-        return DeviceValidationResult(
-            environment = environment,
-            execution = taskRunner.run(
-                task = buildSmokeTask(request),
-                triggerType = RunTriggerType.MANUAL,
-            ),
-        )
+        return try {
+            DeviceValidationResult(
+                environment = environment,
+                execution = taskRunner.run(
+                    task = buildSmokeTask(request),
+                    triggerType = RunTriggerType.MANUAL,
+                ),
+            )
+        } catch (error: Exception) {
+            if (error is CancellationException) {
+                throw error
+            }
+            DeviceValidationResult(
+                environment = environment,
+                execution = null,
+                errorCode = DeviceValidationErrorCode.SMOKE_CHECK_EXECUTION_EXCEPTION,
+                message = "Smoke check failed with an execution exception.",
+            )
+        }
     }
 
     private fun buildSmokeTask(request: TapSmokeCheckRequest): TaskDefinition = TaskDefinition(

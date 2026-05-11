@@ -36,6 +36,7 @@ import com.plearn.appcontrol.appservice.CredentialSetMemberInput
 import com.plearn.appcontrol.appservice.CredentialProfileSummary
 import com.plearn.appcontrol.appservice.CredentialSetSummary
 import com.plearn.appcontrol.appservice.DeviceEnvironmentReport
+import com.plearn.appcontrol.appservice.DeviceValidationErrorCode
 import com.plearn.appcontrol.appservice.DeviceValidationResult
 import com.plearn.appcontrol.appservice.DeviceValidationService
 import com.plearn.appcontrol.appservice.RecentRunSummary
@@ -48,6 +49,7 @@ import com.plearn.appcontrol.appservice.TapSmokeCheckRequest
 import com.plearn.appcontrol.capability.ElementSelector
 import com.plearn.appcontrol.capability.SelectorType
 import com.plearn.appcontrol.diagnostics.toDiagnosticArtifactDisplayText
+import com.plearn.appcontrol.runner.TaskRunStatus
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -1466,14 +1468,29 @@ private fun DeviceEnvironmentReport.toDisplayText(): String = buildString {
     append("Foreground package: ${foregroundPackageName ?: "unknown"}")
 }
 
-private fun DeviceValidationResult.toDisplayText(): String = buildString {
-    appendLine(environment.toDisplayText())
-    if (errorCode != null) {
-        append("Smoke check blocked: $errorCode${message?.let { " - $it" } ?: ""}")
+internal fun formatDeviceValidationResult(result: DeviceValidationResult): String = buildString {
+    appendLine(result.environment.toDisplayText())
+    if (result.errorCode != null) {
+        val statusLabel = when (result.errorCode) {
+            DeviceValidationErrorCode.SMOKE_CHECK_EXECUTION_EXCEPTION -> "Smoke check failed"
+            else -> "Smoke check blocked"
+        }
+        append("$statusLabel: ${result.errorCode}${result.message?.let { " - $it" } ?: ""}")
     } else {
-        append("Smoke check result: ${execution?.taskRun?.status ?: "unknown"}")
+        val executionStatus = result.execution?.taskRun?.status
+        val statusLabel = when (executionStatus) {
+            TaskRunStatus.SUCCESS -> "Smoke check succeeded"
+            TaskRunStatus.BLOCKED -> "Smoke check blocked"
+            TaskRunStatus.CANCELLED -> "Smoke check cancelled"
+            TaskRunStatus.TIMED_OUT -> "Smoke check timed out"
+            TaskRunStatus.FAILED -> "Smoke check failed"
+            else -> "Smoke check result"
+        }
+        append("$statusLabel: ${executionStatus ?: "unknown"}")
     }
 }
+
+private fun DeviceValidationResult.toDisplayText(): String = formatDeviceValidationResult(this)
 
 private fun formatTimestamp(timestamp: Long?): String {
     if (timestamp == null) {
