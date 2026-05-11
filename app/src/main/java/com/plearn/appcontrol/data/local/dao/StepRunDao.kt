@@ -13,4 +13,19 @@ interface StepRunDao {
 
     @Query("SELECT * FROM step_runs WHERE runId = :runId ORDER BY startedAt ASC")
     suspend fun findByRunId(runId: String): List<StepRunEntity>
+
+    @Query(
+        """
+        SELECT COALESCE(
+            SUM(
+                length(CAST(COALESCE(errorCode, '') AS BLOB)) +
+                length(CAST(COALESCE(message, '') AS BLOB)) +
+                length(CAST(artifactsJson AS BLOB))
+            ),
+            0
+        )
+        FROM step_runs
+        """,
+    )
+    suspend fun estimateDiagnosticsStorageBytes(): Long
 }

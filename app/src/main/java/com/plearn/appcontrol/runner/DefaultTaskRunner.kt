@@ -457,7 +457,7 @@ class DefaultTaskRunner(
         return resolveTextReference(task, textRef)?.masked == true
     }
 
-    private fun buildFailureArtifactJson(
+    private suspend fun buildFailureArtifactJson(
         diagnostics: DiagnosticsPolicy,
         sensitiveContextActive: Boolean,
     ): String {
@@ -515,7 +515,7 @@ class DefaultTaskRunner(
 
     private fun JsonObject.intValue(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
 
-    private fun buildResult(
+    private suspend fun buildResult(
         runId: String,
         task: TaskDefinition,
         triggerType: String,
@@ -553,7 +553,7 @@ class DefaultTaskRunner(
         )
     }
 
-    private fun buildTaskFailureArtifactJson(
+    private suspend fun buildTaskFailureArtifactJson(
         diagnostics: DiagnosticsPolicy,
         terminalOutcome: TaskTerminalOutcome,
         stepRuns: List<StepRunRecord>,

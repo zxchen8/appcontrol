@@ -26,11 +26,40 @@ interface TaskRunDao {
     @Query("SELECT DISTINCT taskId FROM task_runs")
     suspend fun listTaskIds(): List<String>
 
+    @Query(
+        """
+        SELECT COALESCE(
+            SUM(
+                length(CAST(COALESCE(errorCode, '') AS BLOB)) +
+                length(CAST(COALESCE(message, '') AS BLOB)) +
+                length(CAST(artifactsJson AS BLOB))
+            ),
+            0
+        )
+        FROM task_runs
+        """,
+    )
+    suspend fun estimateDiagnosticsStorageBytes(): Long
+
+    @Query(
+        """
+        SELECT runId
+        FROM task_runs
+        WHERE (:protectedRunId IS NULL OR runId != :protectedRunId)
+        ORDER BY startedAt ASC, runId ASC
+        LIMIT 1
+        """,
+    )
+    suspend fun findOldestRunId(protectedRunId: String? = null): String?
+
     @Query("DELETE FROM task_runs WHERE startedAt < :startedBefore")
     suspend fun deleteStartedBefore(startedBefore: Long)
 
     @Query("DELETE FROM task_runs WHERE startedAt < :startedBefore AND runId != :protectedRunId")
     suspend fun deleteStartedBefore(startedBefore: Long, protectedRunId: String)
+
+    @Query("DELETE FROM task_runs WHERE runId = :runId")
+    suspend fun deleteByRunId(runId: String)
 
     @Query(
         """

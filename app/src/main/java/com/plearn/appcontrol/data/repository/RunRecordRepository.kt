@@ -11,15 +11,24 @@ import java.util.concurrent.TimeUnit
 data class DiagnosticsRetentionPolicy(
     val maxRunsPerTask: Int = DEFAULT_MAX_RUNS_PER_TASK,
     val maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
+    val maxStorageBytes: Long = DEFAULT_MAX_STORAGE_BYTES,
+    val captureHighWatermarkBytes: Long = DEFAULT_CAPTURE_HIGH_WATERMARK_BYTES,
 ) {
     init {
         require(maxRunsPerTask >= 0) { "maxRunsPerTask must be >= 0" }
         require(maxAgeMs >= 0) { "maxAgeMs must be >= 0" }
+        require(maxStorageBytes >= 0) { "maxStorageBytes must be >= 0" }
+        require(captureHighWatermarkBytes >= 0) { "captureHighWatermarkBytes must be >= 0" }
+        require(captureHighWatermarkBytes <= maxStorageBytes) {
+            "captureHighWatermarkBytes must be <= maxStorageBytes"
+        }
     }
 
     companion object {
         const val DEFAULT_MAX_RUNS_PER_TASK: Int = 500
         val DEFAULT_MAX_AGE_MS: Long = TimeUnit.DAYS.toMillis(14)
+        const val DEFAULT_MAX_STORAGE_BYTES: Long = 512L * 1024L * 1024L
+        const val DEFAULT_CAPTURE_HIGH_WATERMARK_BYTES: Long = DEFAULT_MAX_STORAGE_BYTES * 9L / 10L
     }
 }
 
@@ -31,6 +40,7 @@ interface RunRecordRepository {
     suspend fun findTaskRunsBySession(sessionId: String): List<TaskRunRecord>
     suspend fun insertStepRuns(stepRuns: List<StepRunRecord>)
     suspend fun findStepRuns(runId: String): List<StepRunRecord>
+    suspend fun canCaptureFailureArtifact(): Boolean = true
 
     suspend fun recordTaskRun(taskRun: TaskRunRecord, stepRuns: List<StepRunRecord>) {
         upsertTaskRun(taskRun)
@@ -70,6 +80,11 @@ class RoomRunRecordRepository(
     override suspend fun findStepRuns(runId: String): List<StepRunRecord> =
         stepRunDao.findByRunId(runId).map { it.toRecord() }
 
+    override suspend fun canCaptureFailureArtifact(): Boolean = database.withTransaction {
+        pruneRetainedRunsForStartup()
+        currentDiagnosticsStorageBytes() < retentionPolicy.captureHighWatermarkBytes
+    }
+
     override suspend fun recordTaskRun(taskRun: TaskRunRecord, stepRuns: List<StepRunRecord>) {
         database.withTransaction {
             taskRunDao.upsert(taskRun.toEntity())
@@ -96,6 +111,7 @@ class RoomRunRecordRepository(
             retainCount = normalizeLimit(retentionPolicy.maxRunsPerTask),
             protectedRunId = taskRun.runId,
         )
+        pruneRunsBeyondStorageBudget(protectedRunId = taskRun.runId)
     }
 
     private suspend fun pruneRetainedRunsForStartup() {
@@ -104,5 +120,16 @@ class RoomRunRecordRepository(
         taskRunDao.listTaskIds().forEach { taskId ->
             taskRunDao.deleteAllExceptMostRecent(taskId, normalizeLimit(retentionPolicy.maxRunsPerTask))
         }
+        pruneRunsBeyondStorageBudget()
     }
+
+    private suspend fun pruneRunsBeyondStorageBudget(protectedRunId: String? = null) {
+        while (currentDiagnosticsStorageBytes() > retentionPolicy.maxStorageBytes) {
+            val oldestRunId = taskRunDao.findOldestRunId(protectedRunId) ?: break
+            taskRunDao.deleteByRunId(oldestRunId)
+        }
+    }
+
+    private suspend fun currentDiagnosticsStorageBytes(): Long =
+        taskRunDao.estimateDiagnosticsStorageBytes() + stepRunDao.estimateDiagnosticsStorageBytes()
 }

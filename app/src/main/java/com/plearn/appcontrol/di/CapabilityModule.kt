@@ -24,8 +24,8 @@ import com.plearn.appcontrol.platform.accessibility.NodeTreeAdapter
 import com.plearn.appcontrol.platform.devicecontrol.RootDeviceControlPort
 import com.plearn.appcontrol.platform.devicecontrol.RootShellPort
 import com.plearn.appcontrol.platform.devicecontrol.SuRootShellPort
+import com.plearn.appcontrol.data.repository.RunRecordRepository
 import com.plearn.appcontrol.runner.DefaultTaskRunner
-import com.plearn.appcontrol.runner.AllowAllDiagnosticsArtifactCaptureGate
 import com.plearn.appcontrol.runner.DiagnosticsArtifactCaptureGate
 import com.plearn.appcontrol.runner.RunnerTimeSource
 import com.plearn.appcontrol.runner.SystemRunnerTimeSource
@@ -78,7 +78,12 @@ object CapabilityModule {
 
     @Provides
     @Singleton
-    fun provideDiagnosticsArtifactCaptureGate(): DiagnosticsArtifactCaptureGate = AllowAllDiagnosticsArtifactCaptureGate
+    fun provideDiagnosticsArtifactCaptureGate(
+        runRecordRepository: RunRecordRepository,
+    ): DiagnosticsArtifactCaptureGate = object : DiagnosticsArtifactCaptureGate {
+        override suspend fun canCaptureFailureArtifact(): Boolean =
+            runRecordRepository.canCaptureFailureArtifact()
+    }
 
     @Provides
     @Singleton

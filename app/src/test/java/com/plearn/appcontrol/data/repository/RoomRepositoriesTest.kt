@@ -15,7 +15,9 @@ import com.plearn.appcontrol.data.model.TaskRunRecord
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -762,6 +764,163 @@ class RoomRepositoriesTest {
 
         assertEquals("run-current-protected", aggressiveRepository.findLatestTaskRun("task-run-a")?.runId)
         assertEquals(listOf("step-1"), aggressiveRepository.findStepRuns("run-current-protected").map { it.stepId })
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldDenyFailureArtifactCaptureWhenStorageWatermarkIsReached() = runBlocking {
+        val budgetRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+                maxStorageBytes = 300L,
+                captureHighWatermarkBytes = 80L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        budgetRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-budget-heavy",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 900,
+                finishedAt = 950,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = "heavy diagnostics payload",
+                artifactsJson = "{}",
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-budget-heavy",
+                    stepId = "step-heavy",
+                    status = "failed",
+                    startedAt = 905,
+                    finishedAt = 910,
+                    durationMs = 5,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "diagnostics message",
+                    artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"payload\":\"${"x".repeat(32)}\"}",
+                ),
+            ),
+        )
+
+        assertFalse(budgetRepository.canCaptureFailureArtifact())
+    }
+
+    @Test
+    fun roomRunRecordRepositoryShouldPruneExpiredDiagnosticsBeforeEvaluatingFailureArtifactBudget() = runBlocking {
+        val seedingRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+                maxStorageBytes = 400L,
+                captureHighWatermarkBytes = 80L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        val budgetRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+                maxStorageBytes = 80L,
+                captureHighWatermarkBytes = 80L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-old-heavy",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 150,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = "heavy diagnostics payload",
+                artifactsJson = "{}",
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-old-heavy",
+                    stepId = "step-old-heavy",
+                    status = "failed",
+                    startedAt = 110,
+                    finishedAt = 120,
+                    durationMs = 10,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "old diagnostics message",
+                    artifactsJson = "{\"artifactType\":\"screenshot_unavailable\",\"reason\":\"DIAG_SCREENSHOT_CAPTURE_NOT_IMPLEMENTED\",\"payload\":\"${"x".repeat(128)}\"}",
+                ),
+            ),
+        )
+        seedingRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-recent-light",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 900,
+                finishedAt = 930,
+                durationMs = 30,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+                artifactsJson = "{}",
+            ),
+            stepRuns = emptyList(),
+        )
+
+        assertTrue(budgetRepository.canCaptureFailureArtifact())
+        assertEquals(listOf("run-recent-light"), budgetRepository.listRecentTaskRunsByTaskId("task-run-a", 10).map { it.runId })
     }
 
     @Test
