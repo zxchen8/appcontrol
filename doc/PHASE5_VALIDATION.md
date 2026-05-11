@@ -1,0 +1,137 @@
+# Phase 5 验证与验收记录
+
+## 1. 目的
+
+本文件用于承接 Phase 5 的三类输出：
+
+- 真机或模拟器可执行的 androidTest 冒烟入口
+- 设备验证与手动回归记录
+- PRD MVP 验收与 72 小时稳定性记录
+
+当前仓库已提供的直接入口：
+
+- instrumentation 冒烟测试：[app/src/androidTest/java/com/plearn/appcontrol/ui/AppControlAppSmokeTest.kt](../app/src/androidTest/java/com/plearn/appcontrol/ui/AppControlAppSmokeTest.kt)
+- smoke check 文案护栏测试：[app/src/test/java/com/plearn/appcontrol/ui/AppControlAppFormattingTest.kt](../app/src/test/java/com/plearn/appcontrol/ui/AppControlAppFormattingTest.kt)
+
+## 2. 执行前置条件
+
+- 设备为 Android 9 或 Android 10
+- 设备已 root，且 root shell 可正常执行
+- AppControl Debug 包与 debugAndroidTest 包已安装
+- 无障碍服务已启用并已连接
+- 目标测试 App 已安装，测试账号和任务配置已导入
+- 设备已关闭会明显干扰调度的电池优化或自启动限制
+- 时区与任务配置预期一致，若用默认样例则保持 Asia/Shanghai
+
+## 3. 可执行入口
+
+### 3.1 本地窄验证
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --tests "com.plearn.appcontrol.ui.AppControlAppFormattingTest"
+.\gradlew.bat :app:compileDebugAndroidTestKotlin
+```
+
+### 3.2 设备冒烟验证
+
+```powershell
+.\gradlew.bat :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.plearn.appcontrol.ui.AppControlAppSmokeTest
+```
+
+预期结果：
+
+- App 可以启动到主界面
+- 顶部摘要卡片可见
+- 任务导入入口、环境检查入口、点击链路 smoke 验证入口可滚动到并显示
+
+## 4. 真机验证记录模板
+
+### 4.1 设备信息
+
+| 字段 | 值 |
+| --- | --- |
+| 设备型号 | Pending |
+| Android 版本 | Pending |
+| Root 方案 | Pending |
+| 构建版本 | Pending |
+| 测试日期 | Pending |
+| 测试人 | Pending |
+
+### 4.2 回归场景矩阵
+
+| 场景 | 步骤 | 预期 | 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面与入口文案显示 | Pending | Pending |
+| 环境检查 | 点击“检查环境” | Root/Accessibility/Foreground package 正确显示 | Pending | Pending |
+| 手动真实执行 | 从任务列表触发手动运行 | 生成 taskRun、stepRun 与诊断证据 | Pending | Pending |
+| cron 调度 | 启用 cron 任务并等待触发 | 调度待命状态正确，任务按 cron 触发 | Pending | Pending |
+| continuous 轮转 | 启用 continuous 任务并观察多轮 | 轮次推进、账号切换和会话记录一致 | Pending | Pending |
+| 失败诊断 | 注入失败场景 | 保留截图或抑制原因，日志可定位 | Pending | Pending |
+
+## 5. PRD MVP 验收清单
+
+来源：[doc/PRD.md](PRD.md) 第 15 节。
+
+| 验收项 | 状态 | 证据 | 备注 |
+| --- | --- | --- | --- |
+| 通过 JSON 配置导入或原始文本编辑创建、修改、启停任务 | Pending | Pending | |
+| 支持启动、重启、点击、滑动、输入 | Pending | Pending | |
+| 支持基于元素定位，并可通过截图或截图抑制原因排障 | Pending | Pending | |
+| 支持分钟级 cron 风格调度 | Pending | Pending | |
+| 支持 continuous 连续循环执行与账号组顺序切换 | Pending | Pending | |
+| 失败时输出日志与诊断证据，敏感场景输出明确抑制原因 | Pending | Pending | |
+| 新增任务无需重新发版即可生效 | Pending | Pending | |
+| 本机手动真实执行模式可用 | Pending | Pending | |
+| 测试机运行模式可用，并能看到待命状态、当前轮次和当前账号 | Pending | Pending | |
+| rooted 测试机完成至少 72 小时稳定性验证 | Pending | Pending | |
+
+## 6. 72 小时稳定性记录模板
+
+### 6.1 运行配置
+
+| 字段 | 值 |
+| --- | --- |
+| 开始时间 | Pending |
+| 结束时间 | Pending |
+| 总时长 | Pending |
+| 目标任务 | Pending |
+| 触发方式 | Pending |
+| 账号组 | Pending |
+| 设备温控/供电策略 | Pending |
+
+### 6.2 指标记录
+
+| 指标 | 值 | 备注 |
+| --- | --- | --- |
+| 总运行次数 | Pending | |
+| 成功次数 | Pending | |
+| 失败次数 | Pending | |
+| 超时次数 | Pending | |
+| 取消次数 | Pending | |
+| 调度丢触发次数 | Pending | |
+| 连续运行中断次数 | Pending | |
+| diagnostics 清理触发次数 | Pending | |
+
+### 6.3 事件与缺陷
+
+| 时间 | 现象 | 影响级别 | 处理动作 | 证据 |
+| --- | --- | --- | --- | --- |
+| Pending | Pending | Pending | Pending | Pending |
+
+### 6.4 结论
+
+- 72 小时是否通过：Pending
+- 是否存在 P0/P1 缺陷：Pending
+- 发布阻断项：Pending
+- 下一步修复或观察项：Pending
+
+## 7. DoD 复核清单
+
+- [ ] 需求与设计文档已同步
+- [ ] 单元测试通过
+- [ ] 必要的 androidTest 或真机验证通过
+- [ ] 关键错误码、日志与诊断链路已复核
+- [ ] 代码评审通过
+- [ ] 未引入已知稳定性回退
+- [ ] MVP 验收项已逐条填写证据
+- [ ] 72 小时稳定性报告已归档

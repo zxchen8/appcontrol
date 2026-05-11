@@ -18,7 +18,9 @@
 - d:/PLearn/appcontrol/doc/PRD.md - 产品范围、MVP 验收标准、里程碑目标
 - d:/PLearn/appcontrol/doc/HIGH_LEVEL_DESIGN.md - 架构分层、模块边界、调度高层语义
 - d:/PLearn/appcontrol/doc/DETAILED_DESIGN.md - DSL 字段语义、状态语义、数据模型与记录结构主源
+- d:/PLearn/appcontrol/doc/PHASE5_VALIDATION.md - Phase 5 验收、真机验证与 72 小时稳定性记录模板
 - d:/PLearn/appcontrol/rules/DEVELOPMENT_RULES.md - 测试覆盖率、日志/安全/DoD 强制规则
+- d:/PLearn/appcontrol/app/src/androidTest/java/com/plearn/appcontrol/ui/AppControlAppSmokeTest.kt - Phase 5 instrumentation 冒烟验证入口
 - d:/PLearn/appcontrol/src - 当前为空；按阶段落地工程与核心实现
 - d:/PLearn/appcontrol/test - 当前为空；按阶段建立单元/集成/设备测试目录
 

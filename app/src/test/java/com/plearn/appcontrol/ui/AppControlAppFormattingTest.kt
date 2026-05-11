@@ -53,6 +53,20 @@ class AppControlAppFormattingTest {
     }
 
     @Test
+    fun shouldFormatMissingSmokeCheckExecutionAndErrorCodeAsUnknown() {
+        val text = formatDeviceValidationResult(
+            DeviceValidationResult(
+                environment = environmentReport(),
+                execution = null,
+                errorCode = null,
+                message = null,
+            ),
+        )
+
+        assertStatusLineEquals(text, "Smoke check result: unknown")
+    }
+
+    @Test
     fun shouldFormatRootValidationErrorAsBlocked() {
         val text = formatDeviceValidationResult(
             DeviceValidationResult(
