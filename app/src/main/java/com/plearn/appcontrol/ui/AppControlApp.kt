@@ -580,7 +580,7 @@ fun AppControlApp(
 }
 
 @Composable
-private fun StatusCard(title: String, body: String) {
+internal fun StatusCard(title: String, body: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -1394,7 +1394,7 @@ private fun RecentRunsCard(recentRuns: List<RecentRunSummary>) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ValidationCard(
+internal fun ValidationCard(
     packageName: String,
     onPackageNameChange: (String) -> Unit,
     selectorValue: String,
@@ -1461,7 +1461,7 @@ private fun ValidationCard(
     }
 }
 
-private fun DeviceEnvironmentReport.toDisplayText(): String = buildString {
+internal fun DeviceEnvironmentReport.toDisplayText(): String = buildString {
     appendLine("Root: ${if (rootReady) "ready" else "missing"}")
     appendLine("Accessibility enabled: $accessibilityEnabled")
     appendLine("Accessibility connected: $accessibilityConnected")
