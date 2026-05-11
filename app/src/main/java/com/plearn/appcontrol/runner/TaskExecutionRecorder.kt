@@ -34,10 +34,7 @@ class RepositoryBackedTaskExecutionRecorder(
             stepRun.copy(runId = persistedTaskRun.runId)
         }
 
-        runRecordRepository.upsertTaskRun(persistedTaskRun)
-        if (persistedStepRuns.isNotEmpty()) {
-            runRecordRepository.insertStepRuns(persistedStepRuns)
-        }
+        runRecordRepository.recordTaskRun(persistedTaskRun, persistedStepRuns)
 
         return result.copy(
             taskRun = persistedTaskRun,

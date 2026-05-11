@@ -1,9 +1,27 @@
 package com.plearn.appcontrol.data.repository
 
+import androidx.room.withTransaction
+import com.plearn.appcontrol.data.local.AppControlDatabase
 import com.plearn.appcontrol.data.local.dao.StepRunDao
 import com.plearn.appcontrol.data.local.dao.TaskRunDao
 import com.plearn.appcontrol.data.model.StepRunRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
+import java.util.concurrent.TimeUnit
+
+data class DiagnosticsRetentionPolicy(
+    val maxRunsPerTask: Int = DEFAULT_MAX_RUNS_PER_TASK,
+    val maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
+) {
+    init {
+        require(maxRunsPerTask >= 0) { "maxRunsPerTask must be >= 0" }
+        require(maxAgeMs >= 0) { "maxAgeMs must be >= 0" }
+    }
+
+    companion object {
+        const val DEFAULT_MAX_RUNS_PER_TASK: Int = 500
+        val DEFAULT_MAX_AGE_MS: Long = TimeUnit.DAYS.toMillis(14)
+    }
+}
 
 interface RunRecordRepository {
     suspend fun upsertTaskRun(taskRun: TaskRunRecord)
@@ -13,11 +31,21 @@ interface RunRecordRepository {
     suspend fun findTaskRunsBySession(sessionId: String): List<TaskRunRecord>
     suspend fun insertStepRuns(stepRuns: List<StepRunRecord>)
     suspend fun findStepRuns(runId: String): List<StepRunRecord>
+
+    suspend fun recordTaskRun(taskRun: TaskRunRecord, stepRuns: List<StepRunRecord>) {
+        upsertTaskRun(taskRun)
+        if (stepRuns.isNotEmpty()) {
+            insertStepRuns(stepRuns)
+        }
+    }
 }
 
 class RoomRunRecordRepository(
+    private val database: AppControlDatabase,
     private val taskRunDao: TaskRunDao,
     private val stepRunDao: StepRunDao,
+    private val retentionPolicy: DiagnosticsRetentionPolicy = DiagnosticsRetentionPolicy(),
+    private val nowMsProvider: () -> Long = System::currentTimeMillis,
 ) : RunRecordRepository {
     override suspend fun upsertTaskRun(taskRun: TaskRunRecord) {
         taskRunDao.upsert(taskRun.toEntity())
@@ -42,5 +70,25 @@ class RoomRunRecordRepository(
     override suspend fun findStepRuns(runId: String): List<StepRunRecord> =
         stepRunDao.findByRunId(runId).map { it.toRecord() }
 
+    override suspend fun recordTaskRun(taskRun: TaskRunRecord, stepRuns: List<StepRunRecord>) {
+        database.withTransaction {
+            taskRunDao.upsert(taskRun.toEntity())
+            if (stepRuns.isNotEmpty()) {
+                stepRunDao.insertAll(stepRuns.map { it.toEntity() })
+            }
+            pruneRetainedRuns(taskRun)
+        }
+    }
+
     private fun normalizeLimit(limit: Int): Int = limit.coerceAtLeast(0)
+
+    private suspend fun pruneRetainedRuns(taskRun: TaskRunRecord) {
+        val cutoffStartedAt = (nowMsProvider() - retentionPolicy.maxAgeMs).coerceAtLeast(0L)
+        taskRunDao.deleteStartedBefore(cutoffStartedAt, taskRun.runId)
+        taskRunDao.deleteAllExceptMostRecent(
+            taskId = taskRun.taskId,
+            retainCount = normalizeLimit(retentionPolicy.maxRunsPerTask),
+            protectedRunId = taskRun.runId,
+        )
+    }
 }

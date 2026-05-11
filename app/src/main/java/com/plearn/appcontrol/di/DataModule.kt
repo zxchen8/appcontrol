@@ -78,9 +78,10 @@ object DataModule {
     @Provides
     @Singleton
     fun provideRunRecordRepository(
+        database: AppControlDatabase,
         taskRunDao: TaskRunDao,
         stepRunDao: StepRunDao,
-    ): RunRecordRepository = RoomRunRecordRepository(taskRunDao, stepRunDao)
+    ): RunRecordRepository = RoomRunRecordRepository(database, taskRunDao, stepRunDao)
 
     private const val DATABASE_NAME = "appcontrol.db"
 }

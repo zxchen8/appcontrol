@@ -40,7 +40,12 @@ class RoomRepositoriesTest {
         taskRepository = RoomTaskRepository(database.taskDefinitionDao(), database.taskScheduleStateDao())
         credentialRepository = RoomCredentialRepository(database.credentialProfileDao(), database.credentialSetDao())
         sessionRepository = RoomSessionRepository(database.continuousSessionDao())
-        runRecordRepository = RoomRunRecordRepository(database.taskRunDao(), database.stepRunDao())
+        runRecordRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            nowMsProvider = { 1_000L },
+        )
     }
 
     @After
@@ -450,6 +455,313 @@ class RoomRepositoriesTest {
         val recentRuns = runRecordRepository.listRecentTaskRunsByTaskId(taskId = "task-run-a", limit = 5)
 
         assertEquals(listOf("run-b", "run-a"), recentRuns.map { it.runId })
+    }
+
+    @Test
+    fun runRecordRepositoryShouldPruneRunsOlderThanRetentionWindowAndCascadeStepRuns() = runBlocking {
+        val pruningRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 500L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        pruningRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-old",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 150,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-old",
+                    stepId = "step-old",
+                    status = "failed",
+                    startedAt = 110,
+                    finishedAt = 120,
+                    durationMs = 10,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "old failure",
+                    artifactsJson = "{}",
+                ),
+            ),
+        )
+
+        pruningRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-recent",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 900,
+                finishedAt = 950,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+
+        val recentRuns = pruningRepository.listRecentTaskRunsByTaskId(taskId = "task-run-a", limit = 5)
+
+        assertEquals(listOf("run-recent"), recentRuns.map { it.runId })
+        assertEquals(emptyList<StepRunRecord>(), pruningRepository.findStepRuns("run-old"))
+    }
+
+    @Test
+    fun runRecordRepositoryShouldPruneOldestRunsBeyondPerTaskLimitAndCascadeStepRuns() = runBlocking {
+        val pruningRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 2,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        pruningRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-oldest",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 100,
+                finishedAt = 150,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-oldest",
+                    stepId = "step-oldest",
+                    status = "failed",
+                    startedAt = 110,
+                    finishedAt = 120,
+                    durationMs = 10,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "oldest failure",
+                    artifactsJson = "{}",
+                ),
+            ),
+        )
+        pruningRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-middle",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 200,
+                finishedAt = 250,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+        pruningRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-newest",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "success",
+                startedAt = 300,
+                finishedAt = 350,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = null,
+                message = null,
+            ),
+            stepRuns = emptyList(),
+        )
+
+        val recentRuns = pruningRepository.listRecentTaskRunsByTaskId(taskId = "task-run-a", limit = 5)
+
+        assertEquals(listOf("run-newest", "run-middle"), recentRuns.map { it.runId })
+        assertEquals(emptyList<StepRunRecord>(), pruningRepository.findStepRuns("run-oldest"))
+    }
+
+    @Test
+    fun runRecordRepositoryShouldRollbackTaskRunAndStepRunsWhenRetentionPruneFails() = runBlocking {
+        val failingRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 10,
+                maxAgeMs = 10_000L,
+            ),
+            nowMsProvider = { throw IllegalStateException("retention clock failure") },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        try {
+            failingRepository.recordTaskRun(
+                taskRun = TaskRunRecord(
+                    runId = "run-failing-prune",
+                    sessionId = null,
+                    cycleNo = null,
+                    taskId = "task-run-a",
+                    credentialSetId = null,
+                    credentialProfileId = null,
+                    credentialAlias = null,
+                    status = "failed",
+                    startedAt = 100,
+                    finishedAt = 120,
+                    durationMs = 20,
+                    triggerType = "manual",
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = null,
+                ),
+                stepRuns = listOf(
+                    StepRunRecord(
+                        runId = "run-failing-prune",
+                        stepId = "step-1",
+                        status = "failed",
+                        startedAt = 101,
+                        finishedAt = 110,
+                        durationMs = 9,
+                        errorCode = "RUNNER_STEP_FAILED",
+                        message = "failed before prune",
+                        artifactsJson = "{}",
+                    ),
+                ),
+            )
+            throw AssertionError("Expected retention prune failure to propagate")
+        } catch (error: IllegalStateException) {
+            assertEquals("retention clock failure", error.message)
+        }
+
+        assertEquals(null, failingRepository.findLatestTaskRun("task-run-a"))
+        assertEquals(emptyList<StepRunRecord>(), failingRepository.findStepRuns("run-failing-prune"))
+    }
+
+    @Test
+    fun runRecordRepositoryShouldProtectCurrentRunEvenWhenItExceedsRetentionImmediately() = runBlocking {
+        val aggressiveRepository = RoomRunRecordRepository(
+            database,
+            database.taskRunDao(),
+            database.stepRunDao(),
+            retentionPolicy = DiagnosticsRetentionPolicy(
+                maxRunsPerTask = 0,
+                maxAgeMs = 0L,
+            ),
+            nowMsProvider = { 1_000L },
+        )
+        taskRepository.upsertTaskDefinition(
+            TaskDefinitionRecord(
+                taskId = "task-run-a",
+                name = "任务运行A",
+                enabled = true,
+                triggerType = "cron",
+                definitionStatus = "ready",
+                rawJson = "{\"taskId\":\"task-run-a\"}",
+                updatedAt = 100,
+            ),
+        )
+
+        aggressiveRepository.recordTaskRun(
+            taskRun = TaskRunRecord(
+                runId = "run-current-protected",
+                sessionId = null,
+                cycleNo = null,
+                taskId = "task-run-a",
+                credentialSetId = null,
+                credentialProfileId = null,
+                credentialAlias = null,
+                status = "failed",
+                startedAt = 900,
+                finishedAt = 950,
+                durationMs = 50,
+                triggerType = "manual",
+                errorCode = "RUNNER_STEP_FAILED",
+                message = null,
+            ),
+            stepRuns = listOf(
+                StepRunRecord(
+                    runId = "run-current-protected",
+                    stepId = "step-1",
+                    status = "failed",
+                    startedAt = 910,
+                    finishedAt = 920,
+                    durationMs = 10,
+                    errorCode = "RUNNER_STEP_FAILED",
+                    message = "current run must survive retention",
+                    artifactsJson = "{}",
+                ),
+            ),
+        )
+
+        assertEquals("run-current-protected", aggressiveRepository.findLatestTaskRun("task-run-a")?.runId)
+        assertEquals(listOf("step-1"), aggressiveRepository.findStepRuns("run-current-protected").map { it.stepId })
     }
 
     @Test
