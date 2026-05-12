@@ -1079,6 +1079,7 @@ private fun TaskDashboardRow(
                 }
                 Button(
                     onClick = { onLoadTaskJson(task) },
+                    modifier = Modifier.testTag("task-load-json-${task.taskId}"),
                     enabled = !actionInFlight,
                 ) {
                     Text("载入 JSON")

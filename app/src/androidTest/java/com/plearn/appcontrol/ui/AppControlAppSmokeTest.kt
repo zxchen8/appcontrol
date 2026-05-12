@@ -1,7 +1,9 @@
 package com.plearn.appcontrol.ui
 
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -12,6 +14,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.plearn.appcontrol.MainActivity
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -99,17 +102,58 @@ class AppControlAppSmokeTest {
             .assertIsDisplayed()
     }
 
+    @Test
+    fun shouldLoadImportedTaskJsonBackIntoEditor() {
+        val importedTask = importUniqueTask()
+        val placeholderJson = """
+            {
+                "schemaVersion": "1.0",
+                "taskId": "placeholder-task",
+                "name": "Placeholder Task",
+                "enabled": false,
+                "targetApp": {
+                    "packageName": "com.example.placeholder"
+                },
+                "trigger": {
+                    "type": "cron",
+                    "expression": "*/30 * * * *",
+                    "timezone": "Asia/Shanghai"
+                },
+                "executionPolicy": {
+                    "taskTimeoutMs": 30000,
+                    "maxRetries": 0,
+                    "retryBackoffMs": 1000,
+                    "conflictPolicy": "skip",
+                    "onMissedSchedule": "skip"
+                },
+                "steps": []
+            }
+        """.trimIndent()
+
+        composeRule.onNodeWithTag("task-editor-json").performTextReplacement(placeholderJson)
+        composeRule.onNodeWithTag("task-editor-json").assertTextContains("placeholder-task", substring = true)
+
+        composeRule.onNodeWithTag("task-load-json-${importedTask.taskId}")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            editorJson() == importedTask.rawJson
+        }
+
+        assertEquals(importedTask.rawJson, editorJson())
+    }
+
     private fun importUniqueTask(): ImportedTask {
         val uniqueSuffix = System.currentTimeMillis()
         val taskId = "sample-task-$uniqueSuffix"
         val taskName = "Sample Task $uniqueSuffix"
-
-        composeRule.onNodeWithTag("task-editor-json").performTextReplacement(
-            uniqueTaskJson(
-                taskId = taskId,
-                taskName = taskName,
-            ),
+        val rawJson = uniqueTaskJson(
+            taskId = taskId,
+            taskName = taskName,
         )
+
+        composeRule.onNodeWithTag("task-editor-json").performTextReplacement(rawJson)
         composeRule.onNodeWithText("导入或更新任务").performScrollTo().performClick()
 
         composeRule.waitUntil(timeoutMillis = 10_000) {
@@ -129,13 +173,20 @@ class AppControlAppSmokeTest {
         return ImportedTask(
             taskId = taskId,
             taskName = taskName,
+            rawJson = rawJson,
         )
     }
 
     private data class ImportedTask(
         val taskId: String,
         val taskName: String,
+        val rawJson: String,
     )
+
+    private fun editorJson(): String = composeRule.onNodeWithTag("task-editor-json")
+        .fetchSemanticsNode()
+        .config[SemanticsProperties.EditableText]
+        .text
 
     private fun uniqueTaskJson(taskId: String, taskName: String): String =
         """
