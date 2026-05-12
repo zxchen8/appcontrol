@@ -1058,6 +1058,7 @@ private fun TaskDashboardRow(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { onSelectTask(task) },
+                    modifier = Modifier.testTag("task-detail-${task.taskId}"),
                     enabled = !actionInFlight && !taskDetailLoading,
                 ) {
                     Text(if (selected) "当前详情" else "查看详情")
@@ -1129,6 +1130,7 @@ private fun TaskMonitoringDetailCard(
                 else -> {
                     Text(
                         text = "${snapshot.definition.name} (${snapshot.definition.taskId})",
+                        modifier = Modifier.testTag("task-detail-definition-${snapshot.definition.taskId}"),
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
@@ -1137,6 +1139,7 @@ private fun TaskMonitoringDetailCard(
                     )
                     Text(
                         text = "standby=${snapshot.scheduleState?.standbyEnabled ?: false} | next=${formatTimestamp(snapshot.scheduleState?.nextTriggerAt)} | lastTrigger=${formatTimestamp(snapshot.scheduleState?.lastTriggerAt)} | schedule=${snapshot.scheduleState?.lastScheduleStatus ?: "idle"}",
+                        modifier = Modifier.testTag("task-detail-schedule-${snapshot.definition.taskId}"),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (snapshot.runningSession != null) {

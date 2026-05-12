@@ -144,6 +144,32 @@ class AppControlAppSmokeTest {
         assertEquals(importedTask.rawJson, editorJson())
     }
 
+    @Test
+    fun shouldOpenImportedTaskDetailAndShowScheduleSummary() {
+        val importedTask = importUniqueTask()
+
+        composeRule.onNodeWithTag("task-detail-${importedTask.taskId}")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-detail-definition-${importedTask.taskId}")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-detail-definition-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains(importedTask.taskName, substring = true)
+
+        composeRule.onNodeWithTag("task-detail-schedule-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains("standby=true", substring = true)
+    }
+
     private fun importUniqueTask(): ImportedTask {
         val uniqueSuffix = System.currentTimeMillis()
         val taskId = "sample-task-$uniqueSuffix"
