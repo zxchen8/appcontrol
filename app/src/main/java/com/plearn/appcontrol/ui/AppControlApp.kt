@@ -1074,6 +1074,7 @@ private fun TaskDashboardRow(
                 }
                 Button(
                     onClick = { onRunTaskNow(task) },
+                    modifier = Modifier.testTag("task-run-now-${task.taskId}"),
                     enabled = !actionInFlight,
                 ) {
                     Text("手动运行")
@@ -1216,6 +1217,11 @@ private fun TaskMonitoringDetailCard(
                                 ) {
                                     Text(
                                         text = "run=${run.runId} | status=${run.status} | trigger=${run.triggerType}",
+                                        modifier = if (snapshot.selectedRun?.runId == run.runId) {
+                                            Modifier.testTag("task-detail-selected-run-${snapshot.definition.taskId}")
+                                        } else {
+                                            Modifier
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     Text(
@@ -1260,6 +1266,9 @@ private fun TaskMonitoringDetailCard(
                                 ) {
                                     Text(
                                         text = "step=${step.stepId} | status=${step.status}",
+                                        modifier = Modifier.testTag(
+                                            "task-detail-step-${snapshot.definition.taskId}-${step.stepId}",
+                                        ),
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     Text(

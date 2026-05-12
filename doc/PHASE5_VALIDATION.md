@@ -44,12 +44,12 @@
 - App 可以启动到主界面
 - 顶部摘要卡片可见
 - 任务导入入口、环境检查入口、点击链路 smoke 验证入口可滚动到并显示
-- `AppControlAppSmokeTest` 会验证任务编辑器中的样例 JSON 经唯一 taskId/name 改写后可被导入，任务停用再启用的往返操作会刷新到读侧任务视图，可从任务行把当前仓库中的任务 JSON 重新载回编辑器，并可打开任务监控详情读取调度摘要
+- `AppControlAppSmokeTest` 会验证任务编辑器中的样例 JSON 经唯一 taskId/name 改写后可被导入，任务停用再启用的往返操作会刷新到读侧任务视图，可从任务行把当前仓库中的任务 JSON 重新载回编辑器，并可打开任务监控详情读取与刷新调度摘要，以及在手动运行后看到 recent run 与 step 记录
 - `DeviceValidationUiSmokeTest` 会在独立的 deterministic UI harness 中验证点击“检查环境”后，环境卡片能刷新出 `Root`、`Accessibility enabled`、`Accessibility connected`、`Foreground package` 四行结果
 
 ### 3.3 模拟器预检步骤
 
-适用目标：在 Android 9/10 模拟器上先验证 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧、入口可见性与设备验证入口的文本刷新护栏，不替代 rooted 真机验收。
+适用目标：在 Android 9/10 模拟器上先验证 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、入口可见性与设备验证入口的文本刷新护栏，不替代 rooted 真机验收。
 
 模拟器预检前置条件：
 
@@ -71,12 +71,12 @@ adb -s <device-id> root
 1. 确认设备已连接，且 Android 版本为 9 或 10。
 2. 确认 `sys.boot_completed` 返回 `1`，避免在系统未完全启动时触发 UI 用例。
 3. 若镜像支持，执行 `adb root`，用于尽早暴露 root shell 差异。
-4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧和入口可见性正常。
+4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新，以及入口可见性正常。
 5. 检查 `DeviceValidationUiSmokeTest` 已通过，证明设备验证入口中的“检查环境”按钮能驱动环境文本刷新护栏。
 
 已验证基线：
 
-- 2026-05-12：`emulator-5554`，Android 9，`.\gradlew.bat :app:connectedDebugAndroidTest` 通过，共 7 条 instrumentation 用例。
+- 2026-05-12：`emulator-5554`，Android 9，`.\gradlew.bat :app:connectedDebugAndroidTest` 通过，共 9 条 instrumentation 用例。
 
 当前模拟器自动化覆盖快照：
 
@@ -88,6 +88,8 @@ adb -s <device-id> root
 | `AppControlAppSmokeTest.shouldToggleImportedTaskDisabledAndEnabledAgain` | 唯一任务停用再启用的写读侧往返刷新 | Passed on 2026-05-12 |
 | `AppControlAppSmokeTest.shouldLoadImportedTaskJsonBackIntoEditor` | 任务行“载入 JSON”会把当前仓库中的任务 JSON 重新写回编辑器 | Passed on 2026-05-12 |
 | `AppControlAppSmokeTest.shouldOpenImportedTaskDetailAndShowScheduleSummary` | 唯一任务可从任务行打开监控详情，并显示调度摘要 | Passed on 2026-05-12 |
+| `AppControlAppSmokeTest.shouldRefreshTaskDetailScheduleSummaryAfterDisablingSelectedTask` | 已打开详情的唯一任务在停用后，详情调度摘要会刷新为 `standby=false` | Passed on 2026-05-12 |
+| `AppControlAppSmokeTest.shouldShowRecentRunAndStepRecordsAfterManualRun` | 手动运行唯一任务后，详情会出现 latest manual run 与 `step-start-app` 步骤记录 | Passed on 2026-05-12 |
 | `DeviceValidationUiSmokeTest.shouldRenderEnvironmentDetailsAfterInspectEnvironmentClick` | 设备验证入口的 deterministic 环境文本刷新 | Passed on 2026-05-12 |
 
 建议记录的证据：
@@ -98,7 +100,7 @@ adb -s <device-id> root
 
 ### 3.4 Rooted 真机后续验证
 
-模拟器预检只覆盖 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
+模拟器预检只覆盖 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
 
 - 无障碍服务启用与连接闭环
 - 手动真实执行与步骤诊断产物落库
@@ -123,8 +125,8 @@ adb -s <device-id> root
 
 | 场景 | 步骤 | 预期 | 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，唯一任务导入与停用再启用会刷新到读侧任务视图，当前仓库中的任务 JSON 可载回编辑器，可打开任务详情读取调度摘要，且 deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
-| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面、入口文案以及唯一任务导入、停用再启用、当前仓库中的任务 JSON 载回编辑器和任务详情调度摘要读侧刷新正常 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
+| 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，唯一任务导入与停用再启用会刷新到读侧任务视图，当前仓库中的任务 JSON 可载回编辑器，可打开任务详情读取调度摘要，并可在停用后看到 `standby=false`，手动运行后可看到 recent run 与 step 记录，且 deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
+| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面、入口文案以及唯一任务导入、停用再启用、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新，以及手动运行后的 recent run/step 详情刷新正常 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
 | 环境检查（rooted 真机） | 点击“检查环境” | Root/Accessibility/Foreground package 的真实设备状态正确显示 | Pending | Pending |
 | 手动真实执行 | 从任务列表触发手动运行 | 生成 taskRun、stepRun 与诊断证据 | Pending | Pending |
 | cron 调度 | 启用 cron 任务并等待触发 | 调度待命状态正确，任务按 cron 触发 | Pending | Pending |

@@ -148,16 +148,7 @@ class AppControlAppSmokeTest {
     fun shouldOpenImportedTaskDetailAndShowScheduleSummary() {
         val importedTask = importUniqueTask()
 
-        composeRule.onNodeWithTag("task-detail-${importedTask.taskId}")
-            .performScrollTo()
-            .performClick()
-
-        composeRule.waitUntil(timeoutMillis = 10_000) {
-            runCatching {
-                composeRule.onAllNodesWithTag("task-detail-definition-${importedTask.taskId}")
-                    .fetchSemanticsNodes().isNotEmpty()
-            }.getOrDefault(false)
-        }
+        openTaskDetail(importedTask)
 
         composeRule.onNodeWithTag("task-detail-definition-${importedTask.taskId}")
             .performScrollTo()
@@ -168,6 +159,72 @@ class AppControlAppSmokeTest {
             .performScrollTo()
             .assertIsDisplayed()
             .assertTextContains("standby=true", substring = true)
+    }
+
+    @Test
+    fun shouldRefreshTaskDetailScheduleSummaryAfterDisablingSelectedTask() {
+        val importedTask = importUniqueTask()
+
+        openTaskDetail(importedTask)
+
+        composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-disable")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onNodeWithTag("task-detail-schedule-${importedTask.taskId}")
+                    .assertTextContains("standby=false", substring = true)
+                true
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-detail-definition-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains(importedTask.taskName, substring = true)
+        composeRule.onNodeWithTag("task-detail-schedule-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains("standby=false", substring = true)
+    }
+
+    @Test
+    fun shouldShowRecentRunAndStepRecordsAfterManualRun() {
+        val importedTask = importUniqueTask()
+
+        openTaskDetail(importedTask)
+
+        composeRule.onNodeWithText("当前任务还没有运行记录。")
+            .performScrollTo()
+            .assertIsDisplayed()
+
+        composeRule.onNodeWithTag("task-run-now-${importedTask.taskId}")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-detail-selected-run-${importedTask.taskId}")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-detail-step-${importedTask.taskId}-step-start-app")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-detail-selected-run-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains("trigger=manual", substring = true)
+
+        composeRule.onNodeWithTag("task-detail-step-${importedTask.taskId}-step-start-app")
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 
     private fun importUniqueTask(): ImportedTask {
@@ -182,14 +239,14 @@ class AppControlAppSmokeTest {
         composeRule.onNodeWithTag("task-editor-json").performTextReplacement(rawJson)
         composeRule.onNodeWithText("导入或更新任务").performScrollTo().performClick()
 
-        composeRule.waitUntil(timeoutMillis = 10_000) {
+        composeRule.waitUntil(timeoutMillis = 15_000) {
             runCatching {
                 composeRule.onAllNodesWithTag("task-row-$taskId")
                     .fetchSemanticsNodes().isNotEmpty()
             }.getOrDefault(false)
         }
 
-        composeRule.waitUntil(timeoutMillis = 10_000) {
+        composeRule.waitUntil(timeoutMillis = 15_000) {
             runCatching {
                 composeRule.onNodeWithTag("task-toggle-$taskId-disable").assertIsEnabled()
                 true
@@ -208,6 +265,19 @@ class AppControlAppSmokeTest {
         val taskName: String,
         val rawJson: String,
     )
+
+    private fun openTaskDetail(importedTask: ImportedTask) {
+        composeRule.onNodeWithTag("task-detail-${importedTask.taskId}")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-detail-definition-${importedTask.taskId}")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+    }
 
     private fun editorJson(): String = composeRule.onNodeWithTag("task-editor-json")
         .fetchSemanticsNode()
