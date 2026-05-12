@@ -1036,6 +1036,7 @@ private fun TaskDashboardRow(
             )
             Text(
                 text = "latest=${task.latestRunStatus ?: "无"}${task.latestRunTriggerType?.let { " ($it)" } ?: ""} @ ${formatTimestamp(task.latestRunStartedAt)}",
+                modifier = Modifier.testTag("task-latest-${task.taskId}"),
                 style = MaterialTheme.typography.bodySmall,
             )
             if (task.latestRunErrorCode != null) {
@@ -1200,7 +1201,7 @@ private fun TaskMonitoringDetailCard(
                     if (snapshot.recentRuns.isEmpty()) {
                         Text(text = "当前任务还没有运行记录。", style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        snapshot.recentRuns.forEach { run ->
+                        snapshot.recentRuns.forEachIndexed { index, run ->
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
@@ -1236,6 +1237,9 @@ private fun TaskMonitoringDetailCard(
                                     }
                                     Button(
                                         onClick = { onSelectRun(run.runId) },
+                                        modifier = Modifier.testTag(
+                                            "task-detail-select-run-${snapshot.definition.taskId}-$index",
+                                        ),
                                         enabled = !loading && !actionInFlight,
                                     ) {
                                         Text(if (snapshot.selectedRun?.runId == run.runId) "当前步骤详情" else "查看步骤详情")

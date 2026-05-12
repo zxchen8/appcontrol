@@ -227,6 +227,33 @@ class AppControlAppSmokeTest {
             .assertIsDisplayed()
     }
 
+    @Test
+    fun shouldRefreshTaskLatestSummaryAfterManualRun() {
+        val importedTask = importUniqueTask()
+
+        openTaskDetail(importedTask)
+
+        composeRule.onNodeWithTag("task-latest-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains("latest=无", substring = true)
+
+        runTaskNowAndWaitForDetail(importedTask)
+
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            runCatching {
+                composeRule.onNodeWithTag("task-latest-${importedTask.taskId}")
+                    .assertTextContains("(manual)", substring = true)
+                true
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-latest-${importedTask.taskId}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains("(manual)", substring = true)
+    }
+
     private fun importUniqueTask(): ImportedTask {
         val uniqueSuffix = System.currentTimeMillis()
         val taskId = "sample-task-$uniqueSuffix"
@@ -275,6 +302,33 @@ class AppControlAppSmokeTest {
             runCatching {
                 composeRule.onAllNodesWithTag("task-detail-definition-${importedTask.taskId}")
                     .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+    }
+
+    private fun runTaskNowAndWaitForDetail(importedTask: ImportedTask) {
+        composeRule.onNodeWithTag("task-run-now-${importedTask.taskId}")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 30_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-detail-selected-run-${importedTask.taskId}")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.waitUntil(timeoutMillis = 30_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-detail-step-${importedTask.taskId}-step-start-app")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.waitUntil(timeoutMillis = 30_000) {
+            runCatching {
+                composeRule.onNodeWithTag("task-run-now-${importedTask.taskId}").assertIsEnabled()
+                true
             }.getOrDefault(false)
         }
     }
