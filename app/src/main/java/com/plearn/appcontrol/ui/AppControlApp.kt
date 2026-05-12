@@ -1025,6 +1025,9 @@ private fun TaskDashboardRow(
             Text(text = "${task.name} (${task.taskId})", style = MaterialTheme.typography.titleSmall)
             Text(
                 text = "enabled=${task.enabled} | definition=${task.definitionStatus} | trigger=${task.triggerType}",
+                modifier = Modifier.testTag(
+                    "task-state-${task.taskId}-${if (task.enabled) "enabled" else "disabled"}",
+                ),
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
@@ -1061,6 +1064,9 @@ private fun TaskDashboardRow(
                 }
                 Button(
                     onClick = { onToggleTaskEnabled(task) },
+                    modifier = Modifier.testTag(
+                        "task-toggle-${task.taskId}-${if (task.enabled) "disable" else "enable"}",
+                    ),
                     enabled = !actionInFlight,
                 ) {
                     Text(if (task.enabled) "停用" else "启用")

@@ -1,6 +1,7 @@
 package com.plearn.appcontrol.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -36,10 +37,72 @@ class AppControlAppSmokeTest {
 
     @Test
     fun shouldImportDefaultTaskAndShowItInTaskList() {
+        val importedTask = importUniqueTask()
+
+        composeRule.onNodeWithTag("task-row-${importedTask.taskId}").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("task-state-${importedTask.taskId}-enabled").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-disable").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun shouldToggleImportedTaskDisabledAndEnabledAgain() {
+        val importedTask = importUniqueTask()
+
+        composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-disable")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-state-${importedTask.taskId}-disabled")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-state-${importedTask.taskId}-disabled")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-enable")
+            .performScrollTo()
+            .assertIsDisplayed()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-enable").assertIsEnabled()
+                true
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-enable")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onAllNodesWithTag("task-state-${importedTask.taskId}-enabled")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-disable").assertIsEnabled()
+                true
+            }.getOrDefault(false)
+        }
+
+        composeRule.onNodeWithTag("task-state-${importedTask.taskId}-enabled")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("task-toggle-${importedTask.taskId}-disable")
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    private fun importUniqueTask(): ImportedTask {
         val uniqueSuffix = System.currentTimeMillis()
         val taskId = "sample-task-$uniqueSuffix"
         val taskName = "Sample Task $uniqueSuffix"
-        val successMessage = "任务 $taskName 已导入，状态=ready。"
 
         composeRule.onNodeWithTag("task-editor-json").performTextReplacement(
             uniqueTaskJson(
@@ -51,22 +114,28 @@ class AppControlAppSmokeTest {
 
         composeRule.waitUntil(timeoutMillis = 10_000) {
             runCatching {
-                composeRule.onAllNodesWithText(successMessage)
-                    .fetchSemanticsNodes().isNotEmpty()
-            }.getOrDefault(false)
-        }
-
-        composeRule.onNodeWithText(successMessage).performScrollTo().assertIsDisplayed()
-
-        composeRule.waitUntil(timeoutMillis = 10_000) {
-            runCatching {
                 composeRule.onAllNodesWithTag("task-row-$taskId")
                     .fetchSemanticsNodes().isNotEmpty()
             }.getOrDefault(false)
         }
 
-        composeRule.onNodeWithTag("task-row-$taskId").performScrollTo().assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onNodeWithTag("task-toggle-$taskId-disable").assertIsEnabled()
+                true
+            }.getOrDefault(false)
+        }
+
+        return ImportedTask(
+            taskId = taskId,
+            taskName = taskName,
+        )
     }
+
+    private data class ImportedTask(
+        val taskId: String,
+        val taskName: String,
+    )
 
     private fun uniqueTaskJson(taskId: String, taskName: String): String =
         """
