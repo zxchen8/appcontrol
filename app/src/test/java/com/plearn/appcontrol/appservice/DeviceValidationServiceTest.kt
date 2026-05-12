@@ -18,15 +18,35 @@ import org.junit.Test
 
 class DeviceValidationServiceTest {
     @Test
+    fun shouldPassCurrentPackageNameToInspectEnvironment() = runBlocking {
+        val inspector = RecordingDeviceEnvironmentInspector(
+            report = environmentReport(
+                targetPackageName = "com.example.target",
+                targetPackageInstalled = true,
+            ),
+        )
+        val service = DeviceValidationService(
+            environmentInspector = inspector,
+            taskRunner = RecordingTaskRunner(),
+        )
+
+        val result = service.inspectEnvironment(packageName = "com.example.target")
+
+        assertEquals("com.example.target", inspector.lastTargetPackageName)
+        assertEquals("com.example.target", result.targetPackageName)
+        assertTrue(result.targetPackageInstalled == true)
+    }
+
+    @Test
     fun shouldBlockSmokeCheckWhenAccessibilityServiceIsNotConnected() = runBlocking {
         val runner = RecordingTaskRunner()
         val service = DeviceValidationService(
             environmentInspector = FixedDeviceEnvironmentInspector(
-                DeviceEnvironmentReport(
-                    rootReady = true,
-                    accessibilityEnabled = true,
+                environmentReport(
                     accessibilityConnected = false,
                     foregroundPackageName = "com.example.target",
+                    targetPackageName = "com.example.target",
+                    targetPackageInstalled = true,
                 ),
             ),
             taskRunner = runner,
@@ -49,11 +69,10 @@ class DeviceValidationServiceTest {
         val runner = RecordingTaskRunner()
         val service = DeviceValidationService(
             environmentInspector = FixedDeviceEnvironmentInspector(
-                DeviceEnvironmentReport(
-                    rootReady = true,
-                    accessibilityEnabled = true,
-                    accessibilityConnected = true,
+                environmentReport(
                     foregroundPackageName = "com.android.launcher3",
+                    targetPackageName = "com.example.target",
+                    targetPackageInstalled = true,
                 ),
             ),
             taskRunner = runner,
@@ -71,6 +90,8 @@ class DeviceValidationServiceTest {
         assertTrue(runner.lastTask!!.steps.map { it.type.name }.containsAll(listOf("START_APP", "WAIT_ELEMENT", "TAP")))
         assertEquals(TaskRunStatus.SUCCESS, result.execution!!.taskRun.status)
         assertEquals("com.android.launcher3", result.environment.foregroundPackageName)
+        assertEquals("com.example.target", result.environment.targetPackageName)
+        assertTrue(result.environment.targetPackageInstalled == true)
     }
 
     @Test
@@ -78,11 +99,10 @@ class DeviceValidationServiceTest {
         val runner = RecordingTaskRunner(shouldThrow = true)
         val service = DeviceValidationService(
             environmentInspector = FixedDeviceEnvironmentInspector(
-                DeviceEnvironmentReport(
-                    rootReady = true,
-                    accessibilityEnabled = true,
-                    accessibilityConnected = true,
+                environmentReport(
                     foregroundPackageName = "com.android.launcher3",
+                    targetPackageName = "com.example.target",
+                    targetPackageInstalled = true,
                 ),
             ),
             taskRunner = runner,
@@ -107,11 +127,10 @@ class DeviceValidationServiceTest {
         val runner = RecordingTaskRunner(shouldCancel = true)
         val service = DeviceValidationService(
             environmentInspector = FixedDeviceEnvironmentInspector(
-                DeviceEnvironmentReport(
-                    rootReady = true,
-                    accessibilityEnabled = true,
-                    accessibilityConnected = true,
+                environmentReport(
                     foregroundPackageName = "com.android.launcher3",
+                    targetPackageName = "com.example.target",
+                    targetPackageInstalled = true,
                 ),
             ),
             taskRunner = runner,
@@ -137,11 +156,10 @@ class DeviceValidationServiceTest {
         val runner = RecordingTaskRunner(resultStatus = TaskRunStatus.CANCELLED)
         val service = DeviceValidationService(
             environmentInspector = FixedDeviceEnvironmentInspector(
-                DeviceEnvironmentReport(
-                    rootReady = true,
-                    accessibilityEnabled = true,
-                    accessibilityConnected = true,
+                environmentReport(
                     foregroundPackageName = "com.android.launcher3",
+                    targetPackageName = "com.example.target",
+                    targetPackageInstalled = true,
                 ),
             ),
             taskRunner = runner,
@@ -160,7 +178,7 @@ class DeviceValidationServiceTest {
     }
 
     @Test
-    fun shouldInspectRootAccessibilityAndForegroundPackage() = runBlocking {
+    fun shouldInspectRootAccessibilityForegroundNotificationPackageAndTimezone() = runBlocking {
         val inspector = DefaultDeviceEnvironmentInspector(
             rootShellPort = FixedRootShellPort(
                 mutableMapOf(
@@ -173,14 +191,52 @@ class DeviceValidationServiceTest {
             ),
             accessibilitySettingsPort = FixedAccessibilitySettingsPort(enabled = true),
             accessibilityConnectionPort = FixedAccessibilityConnectionPort(connected = true),
+            notificationStatusPort = FixedNotificationStatusPort(enabled = true),
+            targetPackageStatusPort = FixedTargetPackageStatusPort(installedPackages = setOf("com.example.target")),
+            deviceTimeZonePort = FixedDeviceTimeZonePort(timeZoneId = "Asia/Shanghai"),
         )
 
-        val result = inspector.inspect()
+        val result = inspector.inspect(targetPackageName = "com.example.target")
 
         assertTrue(result.rootReady)
         assertTrue(result.accessibilityEnabled)
         assertTrue(result.accessibilityConnected)
         assertEquals("com.example.target", result.foregroundPackageName)
+        assertTrue(result.notificationsEnabled)
+        assertEquals("com.example.target", result.targetPackageName)
+        assertTrue(result.targetPackageInstalled == true)
+        assertEquals("Asia/Shanghai", result.deviceTimezoneId)
+        assertEquals("Asia/Shanghai", result.sampleTimezoneId)
+        assertTrue(result.sampleTimezoneAligned)
+    }
+
+    @Test
+    fun shouldInspectEnvironmentReportNotificationDisabledPackageMissingAndTimezoneMismatch() = runBlocking {
+        val inspector = DefaultDeviceEnvironmentInspector(
+            rootShellPort = FixedRootShellPort(
+                mutableMapOf(
+                    "id" to ShellSnapshot(exitCode = 0, stdout = "uid=0(root)"),
+                    DefaultDeviceEnvironmentInspector.FOREGROUND_PACKAGE_COMMAND to ShellSnapshot(
+                        exitCode = 0,
+                        stdout = "mCurrentFocus=Window{123 u0 com.android.launcher3/com.android.launcher3.Launcher}",
+                    ),
+                ),
+            ),
+            accessibilitySettingsPort = FixedAccessibilitySettingsPort(enabled = true),
+            accessibilityConnectionPort = FixedAccessibilityConnectionPort(connected = true),
+            notificationStatusPort = FixedNotificationStatusPort(enabled = false),
+            targetPackageStatusPort = FixedTargetPackageStatusPort(installedPackages = emptySet()),
+            deviceTimeZonePort = FixedDeviceTimeZonePort(timeZoneId = "Europe/London"),
+        )
+
+        val result = inspector.inspect(targetPackageName = "com.example.target")
+
+        assertEquals("com.example.target", result.targetPackageName)
+        assertTrue(result.targetPackageInstalled == false)
+        assertTrue(!result.notificationsEnabled)
+        assertEquals("Europe/London", result.deviceTimezoneId)
+        assertEquals("Asia/Shanghai", result.sampleTimezoneId)
+        assertTrue(!result.sampleTimezoneAligned)
     }
 
     private class RecordingTaskRunner(
@@ -228,7 +284,18 @@ class DeviceValidationServiceTest {
     private class FixedDeviceEnvironmentInspector(
         private val report: DeviceEnvironmentReport,
     ) : DeviceEnvironmentInspector {
-        override suspend fun inspect(): DeviceEnvironmentReport = report
+        override suspend fun inspect(targetPackageName: String?): DeviceEnvironmentReport = report
+    }
+
+    private class RecordingDeviceEnvironmentInspector(
+        private val report: DeviceEnvironmentReport,
+    ) : DeviceEnvironmentInspector {
+        var lastTargetPackageName: String? = null
+
+        override suspend fun inspect(targetPackageName: String?): DeviceEnvironmentReport {
+            lastTargetPackageName = targetPackageName
+            return report.copy(targetPackageName = targetPackageName)
+        }
     }
 
     private class FixedRootShellPort(
@@ -248,4 +315,46 @@ class DeviceValidationServiceTest {
     ) : AccessibilityConnectionPort {
         override fun isServiceConnected(): Boolean = connected
     }
+
+    private class FixedNotificationStatusPort(
+        private val enabled: Boolean,
+    ) : NotificationStatusPort {
+        override fun areNotificationsEnabled(): Boolean = enabled
+    }
+
+    private class FixedTargetPackageStatusPort(
+        private val installedPackages: Set<String>,
+    ) : TargetPackageStatusPort {
+        override fun isInstalled(packageName: String): Boolean = packageName in installedPackages
+    }
+
+    private class FixedDeviceTimeZonePort(
+        private val timeZoneId: String,
+    ) : DeviceTimeZonePort {
+        override fun systemTimeZoneId(): String = timeZoneId
+    }
+
+    private fun environmentReport(
+        rootReady: Boolean = true,
+        accessibilityEnabled: Boolean = true,
+        accessibilityConnected: Boolean = true,
+        foregroundPackageName: String? = "com.android.launcher3",
+        notificationsEnabled: Boolean = true,
+        targetPackageName: String? = null,
+        targetPackageInstalled: Boolean? = null,
+        deviceTimezoneId: String = "Asia/Shanghai",
+        sampleTimezoneId: String = "Asia/Shanghai",
+        sampleTimezoneAligned: Boolean = deviceTimezoneId == sampleTimezoneId,
+    ): DeviceEnvironmentReport = DeviceEnvironmentReport(
+        rootReady = rootReady,
+        accessibilityEnabled = accessibilityEnabled,
+        accessibilityConnected = accessibilityConnected,
+        foregroundPackageName = foregroundPackageName,
+        notificationsEnabled = notificationsEnabled,
+        targetPackageName = targetPackageName,
+        targetPackageInstalled = targetPackageInstalled,
+        deviceTimezoneId = deviceTimezoneId,
+        sampleTimezoneId = sampleTimezoneId,
+        sampleTimezoneAligned = sampleTimezoneAligned,
+    )
 }

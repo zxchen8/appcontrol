@@ -20,9 +20,11 @@
 - 设备已 root，且 root shell 可正常执行
 - AppControl Debug 包与 debugAndroidTest 包已安装
 - 无障碍服务已启用并已连接
+- 前台服务通知可正常显示，通知栏可见运行中状态与停止入口
 - 目标测试 App 已安装，测试账号和任务配置已导入
 - 设备已关闭会明显干扰调度的电池优化或自启动限制
 - 时区与任务配置预期一致，若用默认样例则保持 Asia/Shanghai
+- 若要验证 continuous，设备必须是 dedicated 测试机，避免人工前台干扰与其他任务抢占
 
 ## 3. 可执行入口
 
@@ -33,10 +35,33 @@
 .\gradlew.bat :app:compileDebugAndroidTestKotlin
 ```
 
+建议顺序：
+
+1. 先跑 `testDebugUnitTest` 或单个 formatter guardrail，确认纯 Kotlin 或 UI 文案映射没有回归。
+2. 再跑 `compileDebugAndroidTestKotlin`，把 Hilt、Room、androidTest 依赖和 Compose 编译问题提前暴露出来。
+3. 只有本地窄验证稳定后，才进入类级或整套 instrumentation。
+
 ### 3.2 设备冒烟验证
 
 ```powershell
 .\gradlew.bat :app:connectedDebugAndroidTest
+```
+
+说明：当前仓库的自定义 instrumentation runner 默认会开启 deterministic device-control override，因此上面的命令默认用于本地模拟器或本地设备 smoke，不直接等同于 rooted 真机验收。
+
+如果要在 rooted 真机上复用同一套 instrumentation 并走真实 root 路径，必须显式关闭 override：
+
+```powershell
+.\gradlew.bat :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.appcontrol.deterministicDeviceControl=false"
+```
+
+PowerShell 下的定向 instrumentation 命令建议固定使用以下写法，必须把整个 `-P...` 参数放进引号，避免属性被错误拆分：
+
+```powershell
+.\gradlew.bat :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=com.plearn.appcontrol.ui.AppControlAppSmokeTest#shouldShowFailureContextForFailedManualRun"
+.\gradlew.bat :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=com.plearn.appcontrol.ui.AppControlAppSmokeTest"
+.\gradlew.bat :app:connectedDebugAndroidTest
+.\gradlew.bat :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.appcontrol.deterministicDeviceControl=false"
 ```
 
 预期结果：
@@ -46,6 +71,16 @@
 - 任务导入入口、环境检查入口、点击链路 smoke 验证入口可滚动到并显示
 - `AppControlAppSmokeTest` 会验证任务编辑器中的样例 JSON 经唯一 taskId/name 改写后可被导入，任务停用再启用的往返操作会刷新到读侧任务视图，可从任务行把当前仓库中的任务 JSON 重新载回编辑器，并可打开任务监控详情读取与刷新调度摘要，以及在手动运行后看到 recent run、step 记录和任务列表 latest 摘要刷新
 - `DeviceValidationUiSmokeTest` 会在独立的 deterministic UI harness 中验证点击“检查环境”后，环境卡片能刷新出 `Root`、`Accessibility enabled`、`Accessibility connected`、`Foreground package` 四行结果
+
+### 3.2.1 首次失败排障顺序
+
+当 instrumentation 首次失败时，建议固定按以下顺序排障，而不是直接扩大 timeout 或改 helper：
+
+1. 先看 `compileDebugAndroidTestKotlin` 是否已暴露编译、Hilt、Room 或 androidTest 依赖问题。
+2. 如果失败来自整套 `connectedDebugAndroidTest`，先回退到单方法，再回退到整类，确认是局部缺陷还是 suite 顺序污染。
+3. 再看 `app/build/reports/androidTests/connected/debug/index.html` 的 HTML 报告，以及 `app/build/outputs/androidTest-results/connected/debug` 下的结构化结果，确认失败点是方法级、类级还是整套顺序污染。
+4. 再抓 logcat 与 Activity lifecycle，优先排查是否有外部 Activity 抢前台、应用进程崩溃、SQLite 约束异常或 root 授权界面插入。
+5. 最后才调整 wait helper、timeout、seed 方式或环境探测逻辑。
 
 ### 3.3 模拟器预检步骤
 
@@ -58,6 +93,7 @@
 - AppControl Debug 包与 debugAndroidTest 包可安装
 - 若镜像支持，可执行 `adb root`
 - androidTest 通过自定义 instrumentation runner 默认启用 deterministic device-control override，避免本地模拟器 smoke 依赖交互式 `su` 授权；若后续要在 rooted 真机上复用 instrumentation，可通过 `-Pandroid.testInstrumentationRunnerArguments.appcontrol.deterministicDeviceControl=false` 显式关闭
+- 当前代码中仍保留 `Build.*` 启发式 fallback，但验证口径上不依赖它来判定本地环境；若需要 deterministic 路径，以显式 runner override 为准
 
 ```powershell
 adb devices
@@ -74,6 +110,7 @@ adb -s <device-id> root
 3. 若镜像支持，执行 `adb root`，用于尽早暴露 root shell 差异。
 4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新、recent run 详情切换，以及 failure context 读侧展示正常。
 5. 检查 `DeviceValidationUiSmokeTest` 已通过，证明设备验证入口中的“检查环境”按钮能驱动环境文本刷新护栏。
+6. 若 smoke 依赖预置任务、recent run 或 failure context，seed 只能走应用单例数据库或主源码 EntryPoint；不要在 androidTest 里新开 Room 连接或直接清库。
 
 已验证基线：
 
@@ -104,11 +141,16 @@ adb -s <device-id> root
 
 ### 3.4 Rooted 真机后续验证
 
-模拟器预检只覆盖 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新、recent run 详情切换、failure context 读侧展示、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
+模拟器预检只覆盖 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新、recent run 详情切换、failure context 读侧展示、入口可见性和 deterministic 文本刷新护栏。deterministic override 是正式的本地测试路径，不是生产能力的替代实现。以下能力仍必须在 Android 9/10 rooted 真机上完成：
 
+- 新任务或修改后的任务先做本机手动真实执行，再进入测试机调度待命或 continuous 验收
 - 无障碍服务启用与连接闭环
+- 前台服务通知、停止入口和运行中状态展示
 - 手动真实执行与步骤诊断产物落库
+- 环境检查中的通知状态、目标 App 安装状态，以及电池优化、自启动、时区引导
 - cron 与 continuous 调度行为
+- continuous 会话中的当前轮次、当前账号和下一轮状态可见性
+- 若本轮改动涉及 scheduler recovery 或 watchdog，还必须验证进程恢复或设备重启后的恢复链路
 - 失败截图或抑制原因链路
 - 72 小时稳定性验证
 
@@ -131,10 +173,12 @@ adb -s <device-id> root
 | --- | --- | --- | --- | --- |
 | 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，唯一任务导入与停用再启用会刷新到读侧任务视图，当前仓库中的任务 JSON 可载回编辑器，可打开任务详情读取调度摘要，并可在停用后看到 `standby=false`，手动运行后可看到 recent run、step 记录、latest manual 摘要和 failure context，且可在详情页切换 older recent run；deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
 | 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面、入口文案以及唯一任务导入、停用再启用、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、latest manual 摘要刷新、recent run 详情切换和 failure context 展示正常 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
-| 环境检查（rooted 真机） | 点击“检查环境” | Root/Accessibility/Foreground package 的真实设备状态正确显示 | Pending | Pending |
+| 环境检查（rooted 真机） | 点击“检查环境” | Root/Accessibility/Foreground package/通知状态/目标 App 安装状态正确显示，并能提示电池优化、自启动、时区等设置风险 | Pending | Pending |
 | 手动真实执行 | 从任务列表触发手动运行 | 生成 taskRun、stepRun 与诊断证据 | Pending | Pending |
+| 前台服务通知 | 启动手动运行或调度运行 | 通知栏可见运行中状态、当前步骤摘要与停止入口 | Pending | Pending |
 | cron 调度 | 启用 cron 任务并等待触发 | 调度待命状态正确，任务按 cron 触发 | Pending | Pending |
-| continuous 轮转 | 启用 continuous 任务并观察多轮 | 轮次推进、账号切换和会话记录一致 | Pending | Pending |
+| continuous 轮转 | 启用 continuous 任务并观察多轮 | 轮次推进、账号切换、当前轮次/当前账号展示和会话记录一致 | Pending | Pending |
+| 恢复与 Watchdog | 杀掉前台服务或重启设备后恢复 | 若设计要求恢复，调度服务可恢复待命与会话状态；若无需恢复，系统明确记录原因且不产生静默丢调度 | Pending | Pending |
 | 失败诊断 | 注入失败场景 | 保留截图或抑制原因，日志可定位 | Pending | Pending |
 
 ## 5. PRD MVP 验收清单
@@ -198,7 +242,7 @@ adb -s <device-id> root
 
 - [ ] 需求与设计文档已同步
 - [ ] 单元测试通过
-- [ ] 必要的 androidTest 或真机验证通过
+- [ ] 必要的 androidTest 与对应 rooted 真机验证通过
 - [ ] 关键错误码、日志与诊断链路已复核
 - [ ] 代码评审通过
 - [ ] 未引入已知稳定性回退

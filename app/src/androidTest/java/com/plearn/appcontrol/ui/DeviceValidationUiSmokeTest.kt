@@ -19,6 +19,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.plearn.appcontrol.appservice.DeviceEnvironmentReport
@@ -45,6 +46,12 @@ class DeviceValidationUiSmokeTest {
                         accessibilityEnabled = true,
                         accessibilityConnected = false,
                         foregroundPackageName = "com.example.target",
+                        notificationsEnabled = true,
+                        targetPackageName = "com.example.target",
+                        targetPackageInstalled = true,
+                        deviceTimezoneId = "Asia/Shanghai",
+                        sampleTimezoneId = "Asia/Shanghai",
+                        sampleTimezoneAligned = true,
                     )
                     Column(
                         modifier = Modifier
@@ -83,5 +90,55 @@ class DeviceValidationUiSmokeTest {
         composeRule.onNodeWithText("Accessibility enabled: true", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Accessibility connected: false", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Foreground package: com.example.target", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Notifications enabled: true", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Target package: com.example.target", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Target package installed: true", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Device timezone: Asia/Shanghai", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Sample timezone: Asia/Shanghai", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Timezone aligned: true", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun shouldUseEditedPackageNameWhenInspectEnvironmentIsClicked() {
+        composeRule.setContent {
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val scrollState = rememberScrollState()
+                    var packageName by remember { mutableStateOf("com.example.target") }
+                    var environmentText by remember { mutableStateOf("尚未执行环境检查。") }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp)
+                            .verticalScroll(scrollState),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        StatusCard(
+                            title = "环境检查",
+                            body = environmentText,
+                        )
+                        ValidationCard(
+                            packageName = packageName,
+                            onPackageNameChange = { packageName = it },
+                            selectorValue = "com.example.target:id/login_button",
+                            onSelectorValueChange = {},
+                            selectorType = SelectorType.RESOURCE_ID.name,
+                            onSelectorTypeChange = {},
+                            actionInFlight = false,
+                            lastValidationText = "尚未执行点击链路验证。",
+                            onInspectEnvironment = {
+                                environmentText = "Inspect requested: $packageName"
+                            },
+                            onRunSmokeCheck = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("com.example.target").performTextReplacement("com.example.override")
+        composeRule.onNodeWithText("检查环境").performScrollTo().performClick()
+
+        composeRule.onNodeWithText("Inspect requested: com.example.override").assertIsDisplayed()
     }
 }

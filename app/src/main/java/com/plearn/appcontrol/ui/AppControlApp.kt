@@ -532,7 +532,7 @@ fun AppControlApp(
                             scope.launch {
                                 actionInFlight = true
                                 try {
-                                    environmentReport = deviceValidationService.inspectEnvironment()
+                                    environmentReport = deviceValidationService.inspectEnvironment(packageName = packageName)
                                     environmentStatusText = environmentReport?.toDisplayText() ?: "尚未执行环境检查。"
                                 } catch (error: Exception) {
                                     if (error is CancellationException) {
@@ -1499,7 +1499,13 @@ internal fun DeviceEnvironmentReport.toDisplayText(): String = buildString {
     appendLine("Root: ${if (rootReady) "ready" else "missing"}")
     appendLine("Accessibility enabled: $accessibilityEnabled")
     appendLine("Accessibility connected: $accessibilityConnected")
-    append("Foreground package: ${foregroundPackageName ?: "unknown"}")
+    appendLine("Foreground package: ${foregroundPackageName ?: "unknown"}")
+    appendLine("Notifications enabled: $notificationsEnabled")
+    appendLine("Target package: ${targetPackageName ?: "not provided"}")
+    appendLine("Target package installed: ${targetPackageInstalled?.toString() ?: "unknown"}")
+    appendLine("Device timezone: $deviceTimezoneId")
+    appendLine("Sample timezone: $sampleTimezoneId")
+    append("Timezone aligned: $sampleTimezoneAligned")
 }
 
 internal fun formatDeviceValidationResult(result: DeviceValidationResult): String = buildString {

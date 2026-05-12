@@ -70,10 +70,17 @@
 - 核心模块新增代码覆盖率目标不低于 85%
 - 任务解析器、调度器、执行引擎必须有单元测试
 - 涉及平台能力、设备依赖能力或外部适配能力的模块必须有集成测试或设备测试
+- 设备验证必须按三层梯度推进：本地窄验证或编译护栏、deterministic 模拟器 smoke、rooted 真机验收；前一层不稳定时不得直接扩大到后一层
 - 新增步骤类型必须覆盖成功、失败、超时三个场景
 - 凭据读取和变量替换必须有单元测试
 - 日志脱敏、截图抑制和产物清理策略必须有单元测试或集成测试覆盖
 - `platform/accessibility` 模块必须通过可替换接口提供单元测试入口，并通过设备测试覆盖真实 `AccessibilityService` 的绑定与基础能力闭环
+- 允许在 androidTest 中通过显式 instrumentation runner 或等价运行时 override 启用 deterministic capability 实现；前提是开关只对测试生效、生产路径仍保留真实能力链路，并在验证文档中记录关闭方式与适用边界
+- instrumentation 需要 seed 任务、运行记录或 failure context 时，必须走应用进程单例数据库或主源码 EntryPoint；禁止在 androidTest 中新建独立 Room 连接、直接 `clearAllTables`，或通过跨连接重置状态来追求稳定性
+- MainActivity 或 Compose smoke 首次失败时，必须先检查编译输出、connected test HTML 报告、`app/build/outputs/androidTest-results/connected/debug` 下的结构化结果，以及 logcat 或 Activity lifecycle，再决定是否调整 wait helper、timeout、seed 或环境探测逻辑
+- 新增或修改真实设备任务链路时，必须先通过本机手动真实执行，再允许进入测试机调度待命或 continuous 验收
+- rooted 真机验收至少覆盖 root、无障碍、通知、目标 App 安装状态，以及电池优化、自启动、时区等影响调度稳定性的环境前置项
+- 若改动涉及前台服务通知、调度待命、continuous 会话、scheduler recovery 或 watchdog，必须补 rooted 真机验证：通知可见与停止入口、待命状态、当前轮次与当前账号可见性，以及进程恢复或设备重启后的恢复语义
 - 关键变更必须做真实设备验证
 - 发布前必须至少完成一次 72 小时稳定性测试
 
@@ -85,6 +92,7 @@
 - 不允许为了快速跑通而绕过统一执行与记录链路
 - 不允许在页面代码中直接拼接任务流程逻辑
 - 不允许将设备特定兼容逻辑散落在多个模块
+- 用户确认实施计划后，默认进入最小可验证纵切开发；除非用户明确要求，否则不继续扩展排期、团队拆分或额外管理文档
 
 ## 9. 安全与权限规则
 

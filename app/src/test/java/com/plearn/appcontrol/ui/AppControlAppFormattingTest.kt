@@ -101,6 +101,41 @@ class AppControlAppFormattingTest {
         )
     }
 
+    @Test
+    fun shouldFormatEnvironmentWithNotificationDisabledPackageMissingAndTimezoneMismatch() {
+        val text = formatDeviceValidationResult(
+            DeviceValidationResult(
+                environment = environmentReport(
+                    notificationsEnabled = false,
+                    targetPackageName = "com.example.target",
+                    targetPackageInstalled = false,
+                    deviceTimezoneId = "Europe/London",
+                    sampleTimezoneAligned = false,
+                ),
+                execution = null,
+                errorCode = null,
+                message = null,
+            ),
+        )
+
+        assertEquals(
+            """
+            Root: ready
+            Accessibility enabled: true
+            Accessibility connected: true
+            Foreground package: com.android.launcher3
+            Notifications enabled: false
+            Target package: com.example.target
+            Target package installed: false
+            Device timezone: Europe/London
+            Sample timezone: Asia/Shanghai
+            Timezone aligned: false
+            Smoke check result: unknown
+            """.trimIndent(),
+            text,
+        )
+    }
+
     private fun assertStatusLineEquals(
         text: String,
         expected: String,
@@ -112,6 +147,12 @@ class AppControlAppFormattingTest {
             Accessibility enabled: true
             Accessibility connected: true
             Foreground package: com.android.launcher3
+            Notifications enabled: true
+            Target package: com.example.target
+            Target package installed: true
+            Device timezone: Asia/Shanghai
+            Sample timezone: Asia/Shanghai
+            Timezone aligned: true
             $expected
             """.trimIndent(),
             text,
@@ -142,10 +183,24 @@ class AppControlAppFormattingTest {
         ),
     )
 
-    private fun environmentReport(rootReady: Boolean = true): DeviceEnvironmentReport = DeviceEnvironmentReport(
+    private fun environmentReport(
+        rootReady: Boolean = true,
+        notificationsEnabled: Boolean = true,
+        targetPackageName: String? = "com.example.target",
+        targetPackageInstalled: Boolean? = true,
+        deviceTimezoneId: String = "Asia/Shanghai",
+        sampleTimezoneId: String = "Asia/Shanghai",
+        sampleTimezoneAligned: Boolean = deviceTimezoneId == sampleTimezoneId,
+    ): DeviceEnvironmentReport = DeviceEnvironmentReport(
         rootReady = rootReady,
         accessibilityEnabled = true,
         accessibilityConnected = true,
         foregroundPackageName = "com.android.launcher3",
+        notificationsEnabled = notificationsEnabled,
+        targetPackageName = targetPackageName,
+        targetPackageInstalled = targetPackageInstalled,
+        deviceTimezoneId = deviceTimezoneId,
+        sampleTimezoneId = sampleTimezoneId,
+        sampleTimezoneAligned = sampleTimezoneAligned,
     )
 }

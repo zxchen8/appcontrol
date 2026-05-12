@@ -1,37 +1,46 @@
-## Plan: AppControl 首版实施计划
+## Plan: AppControl 实施计划与当前状态
 
-基于现有仓库“仅文档、无代码”的状态，按“先工程骨架与 DSL、再执行能力、再调度与稳定性”的路径推进，严格以 doc 设计主源与 rules 开发规则为准，目标是交付可在 Android 9/10 rooted 测试机稳定运行的 v1。
+本计划最初用于从“仅有 PRD 与设计文档”的仓库启动 AppControl v1 实施。到 2026-05-12，Android Kotlin 单模块应用、DSL 契约、Room 数据层、capability facade、runner/scheduler、UI、诊断链路以及本地 deterministic instrumentation smoke 已落地；当前主线工作已从“实现功能”转为“收口 rooted 真机验收、72 小时稳定性和发布证据”。
 
 **Steps**
-1. Phase 1 - 基线冻结与脚手架落地：确认并冻结首版范围（v1 必做/不做、Android 9/10 边界、手动执行不进入 scheduler、OCR 暂不启用），创建 Android Kotlin 单模块工程骨架（app），补齐构建链路、依赖清单与基础分层目录。*后续所有阶段依赖此阶段*
-2. Phase 1 - 设计契约落地：把 DETAILED_DESIGN 中任务 DSL、执行策略默认值、状态语义转换为可执行契约（Schema/解析规则/校验规则/错误码枚举）。先做解析与校验闭环，再做 UI 与调度接入。*depends on 1*
-3. Phase 2 - 数据层与仓储边界：实现 Room 实体、DAO、Repository 边界（任务定义、调度状态、凭据、会话、运行记录、步骤记录），并落实事务边界（游标推进 + 新轮运行记录创建；任务结束回写 + 会话统计回写）。*depends on 2*
-4. Phase 2 - 能力适配层 MVP：实现 device-control（start/stop/restart/tap/swipe/input）、accessibility 基础查询与点击闭环，形成 capability facade 统一入口；预留 vision OCR 插槽但默认禁用。*depends on 1, parallel with 3 after common model stable*
-5. Phase 3 - runner-engine 状态机：实现运行实例生命周期（idle/preparing/running_step/retrying/success/failed/timed_out/cancelled/blocked）、步骤级超时重试、任务级重试、取消语义、统一结果结构。*depends on 3 and 4*
-6. Phase 3 - scheduler：实现 cron（分钟级）与 continuous（轮次、冷却、maxCycles/maxDuration）、执行锁与冲突处理（conflictPolicy）、错过窗口策略（onMissedSchedule=skip）、服务恢复与开机恢复。*depends on 3 and 5*
-7. Phase 4 - app-service 与 UI 最小闭环：实现环境检查页、任务列表/启停、原始 JSON 导入编辑、手动真实执行入口、运行监控页、运行记录页、账号配置页；确保 UI 不直接调用高权限能力。*depends on 5 and 6*
-8. Phase 4 - 诊断与保留策略：结构化日志、错误码、失败截图与抑制原因统一链路，加入产物保留上限、容量水位清理与退化策略。*depends on 5, parallel with 7 then integrate*
-9. Phase 5 - 测试与稳定性收敛：按规则完成单元/集成/设备测试；重点覆盖解析器、引擎、调度、凭据与变量替换、日志脱敏、截图抑制、账号轮换；执行 72 小时稳定性验证并修复高优缺陷。*depends on 6,7,8*
-10. Phase 5 - 发布前验收：对照 PRD MVP 验收项逐条打勾，完成 DoD（测试、日志、错误处理、评审）并形成可追溯验收记录。*depends on 9*
+1. Phase 1 - 基线冻结与脚手架落地：已完成。已冻结 Android 9/10 rooted 边界、v1 范围和非目标项，并落地 Android Kotlin 单模块工程骨架、构建链路与基础分层目录。*后续所有阶段依赖此阶段*
+2. Phase 1 - 设计契约落地：已完成。DSL、执行策略默认值、状态语义、错误码与解析/校验闭环已落地，并已接入 UI 与执行链路。*depends on 1*
+3. Phase 2 - 数据层与仓储边界：已完成。Room 实体、DAO、Repository、运行记录与会话统计事务边界均已实现。*depends on 2*
+4. Phase 2 - 能力适配层 MVP：已完成。device-control、accessibility 与 capability facade 已接入；deterministic device-control override 已作为本地 instrumentation 路径固化。*depends on 1, parallel with 3 after common model stable*
+5. Phase 3 - runner-engine 状态机：已完成。任务运行生命周期、步骤级/任务级重试、取消/超时与统一结果结构已落地。*depends on 3 and 4*
+6. Phase 3 - scheduler：已完成。cron、continuous、执行锁、conflictPolicy、missed-skip、恢复与开机恢复链路已落地并有回归覆盖。*depends on 3 and 5*
+7. Phase 4 - app-service 与 UI 最小闭环：已完成。主界面、任务导入编辑、手动运行、运行监控、设备验证入口与最近运行详情已串联。*depends on 5 and 6*
+8. Phase 4 - 诊断与保留策略：已完成。结构化日志、错误码、失败上下文、截图/抑制原因与读侧诊断链路已接通。*depends on 5, parallel with 7 then integrate*
+9. Phase 5 - 测试与稳定性收敛：进行中。本地单测、compileDebugAndroidTestKotlin 与 deterministic instrumentation smoke 已通过；rooted 真机验收和 72 小时稳定性仍待执行并记录。*depends on 6,7,8*
+10. Phase 5 - 发布前验收：待完成。需要在 rooted 真机上补齐 MVP 验收证据、DoD 复核与可追溯验收记录。*depends on 9*
+
+**Current Focus**
+1. rooted 真机验收：在 Android 9/10 rooted 设备上完成手动真实执行、环境检查、前台服务通知、cron、continuous、recovery/watchdog 与失败诊断验证。
+2. 72 小时稳定性：补齐 dedicated 测试机上的长稳运行记录与异常归档。
+3. 发布证据收口：按 PRD MVP 清单、Phase 5 验证文档和开发规则汇总最终证据，并保持 `.github` customization 与主文档同步。
 
 **Relevant files**
 - d:/PLearn/appcontrol/doc/PRD.md - 产品范围、MVP 验收标准、里程碑目标
 - d:/PLearn/appcontrol/doc/HIGH_LEVEL_DESIGN.md - 架构分层、模块边界、调度高层语义
 - d:/PLearn/appcontrol/doc/DETAILED_DESIGN.md - DSL 字段语义、状态语义、数据模型与记录结构主源
 - d:/PLearn/appcontrol/doc/PHASE5_VALIDATION.md - Phase 5 验收、真机验证与 72 小时稳定性记录模板
+- d:/PLearn/appcontrol/.github/skills/android-instrumentation-triage/references/repo-reference.md - instrumentation 排障长文参考与 repo 约束说明
 - d:/PLearn/appcontrol/rules/DEVELOPMENT_RULES.md - 测试覆盖率、日志/安全/DoD 强制规则
-- d:/PLearn/appcontrol/app/src/androidTest/java/com/plearn/appcontrol/ui/AppControlAppSmokeTest.kt - Phase 5 instrumentation 冒烟验证入口
-- d:/PLearn/appcontrol/src - 当前为空；按阶段落地工程与核心实现
-- d:/PLearn/appcontrol/test - 当前为空；按阶段建立单元/集成/设备测试目录
+- d:/PLearn/appcontrol/app/src/main/java/com/plearn/appcontrol/MainActivity.kt - 主 Activity 与导航入口
+- d:/PLearn/appcontrol/app/src/main/java/com/plearn/appcontrol/appservice/DeviceValidationService.kt - 设备环境检查与点击链路 smoke check 服务
+- d:/PLearn/appcontrol/app/src/main/java/com/plearn/appcontrol/di/CapabilityModule.kt - deterministic/root device-control 注入边界
+- d:/PLearn/appcontrol/app/src/androidTest/java/com/plearn/appcontrol/AppControlAndroidJUnitRunner.kt - instrumentation runner override 入口
+- d:/PLearn/appcontrol/app/src/androidTest/java/com/plearn/appcontrol/ui/AppControlAppSmokeTest.kt - 主界面与任务读写链路 smoke
+- d:/PLearn/appcontrol/app/src/androidTest/java/com/plearn/appcontrol/ui/DeviceValidationUiSmokeTest.kt - deterministic 设备验证 UI smoke
 
 **Verification**
 1. 契约一致性验证：用文档驱动用例校验 DSL 解析默认值、字段约束与错误码映射，确保实现与详细设计一致。
 2. 调度语义验证：构造 cron 与 continuous 并存、执行锁占用、服务恢复/重启恢复场景，验证 conflictPolicy 与 onMissedSchedule 行为。
 3. 引擎健壮性验证：覆盖步骤成功/失败/超时/取消、步骤级与任务级重试计数口径一致性。
 4. 安全与诊断验证：验证敏感变量日志脱敏、截图抑制条件、抑制原因可追踪、产物清理策略可触发。
-5. 设备闭环验证：在 Android 9/10 rooted 测试机完成环境检查、手动执行、定时执行、连续轮换执行全链路测试。
-6. 稳定性验证：完成至少一次 72 小时连续运行测试并记录稳定性指标。
-7. 验收验证：按 PRD 第 15 节逐项验收，输出通过/失败与证据链接。
+5. 设备闭环验证：本地 deterministic instrumentation smoke 已在 Android 9 模拟器通过；下一步是在 Android 9/10 rooted 测试机完成环境检查、手动执行、定时执行、连续轮换执行与恢复链路全链路测试。
+6. 稳定性验证：完成至少一次 rooted dedicated 测试机上的 72 小时连续运行测试并记录稳定性指标。
+7. 验收验证：按 PRD 第 15 节逐项验收，输出通过/失败与证据链接；当前仍缺 rooted 真机与长稳证据。
 
 **Decisions**
 - 包含范围：v1 必做能力（手动真实执行、cron、continuous、账号轮换、诊断链路、本地存储）。
@@ -44,7 +53,7 @@
 2. 建议在 Phase 1 末即定义统一错误码命名规范与日志字段规范，减少后续跨模块返工。
 3. 建议提前准备至少 1 台 Android 9 与 1 台 Android 10 rooted 设备，避免后期设备验证阻塞。
 
-**Execution Breakdown (可直接分配)**
+**Execution Breakdown（历史实施拆解，当前状态以上方 Steps 与 Current Focus 为准）**
 1. Phase 1A 工程初始化
 - 产出：Android 工程可编译、基础依赖可解析、分层包目录创建完成。
 - 子任务：初始化 app 模块、配置 minSdk/targetSdk/compileSdk、接入 Hilt/Room/Serialization/Coroutines、建立基础 CI 命令。

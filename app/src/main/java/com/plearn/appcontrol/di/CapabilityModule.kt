@@ -5,11 +5,17 @@ import android.os.Build
 import com.plearn.appcontrol.appservice.AccessibilityConnectionPort
 import com.plearn.appcontrol.appservice.AccessibilitySettingsPort
 import com.plearn.appcontrol.appservice.AndroidAccessibilitySettingsPort
+import com.plearn.appcontrol.appservice.AndroidNotificationStatusPort
+import com.plearn.appcontrol.appservice.AndroidTargetPackageStatusPort
+import com.plearn.appcontrol.appservice.DeviceTimeZonePort
 import com.plearn.appcontrol.appservice.DefaultDeviceEnvironmentInspector
 import com.plearn.appcontrol.appservice.DeviceEnvironmentInspector
 import com.plearn.appcontrol.appservice.EnvironmentRootShellPort
+import com.plearn.appcontrol.appservice.NotificationStatusPort
 import com.plearn.appcontrol.appservice.RegistryAccessibilityConnectionPort
 import com.plearn.appcontrol.appservice.RootShellEnvironmentPort
+import com.plearn.appcontrol.appservice.SystemDeviceTimeZonePort
+import com.plearn.appcontrol.appservice.TargetPackageStatusPort
 import com.plearn.appcontrol.capability.AccessibilityPort
 import com.plearn.appcontrol.capability.CapabilityFacade
 import com.plearn.appcontrol.capability.DefaultCapabilityFacade
@@ -136,14 +142,34 @@ object CapabilityModule {
 
     @Provides
     @Singleton
+    fun provideNotificationStatusPort(@ApplicationContext context: Context): NotificationStatusPort =
+        AndroidNotificationStatusPort(context)
+
+    @Provides
+    @Singleton
+    fun provideTargetPackageStatusPort(@ApplicationContext context: Context): TargetPackageStatusPort =
+        AndroidTargetPackageStatusPort(context)
+
+    @Provides
+    @Singleton
+    fun provideDeviceTimeZonePort(): DeviceTimeZonePort = SystemDeviceTimeZonePort
+
+    @Provides
+    @Singleton
     fun provideDeviceEnvironmentInspector(
         rootShellPort: EnvironmentRootShellPort,
         accessibilitySettingsPort: AccessibilitySettingsPort,
         accessibilityConnectionPort: AccessibilityConnectionPort,
+        notificationStatusPort: NotificationStatusPort,
+        targetPackageStatusPort: TargetPackageStatusPort,
+        deviceTimeZonePort: DeviceTimeZonePort,
     ): DeviceEnvironmentInspector = DefaultDeviceEnvironmentInspector(
         rootShellPort = rootShellPort,
         accessibilitySettingsPort = accessibilitySettingsPort,
         accessibilityConnectionPort = accessibilityConnectionPort,
+        notificationStatusPort = notificationStatusPort,
+        targetPackageStatusPort = targetPackageStatusPort,
+        deviceTimeZonePort = deviceTimeZonePort,
     )
 
     @Provides

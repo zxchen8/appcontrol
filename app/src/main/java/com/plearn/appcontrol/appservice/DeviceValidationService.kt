@@ -46,10 +46,11 @@ class DeviceValidationService @Inject constructor(
     private val environmentInspector: DeviceEnvironmentInspector,
     private val taskRunner: TaskRunner,
 ) {
-    suspend fun inspectEnvironment(): DeviceEnvironmentReport = environmentInspector.inspect()
+    suspend fun inspectEnvironment(packageName: String? = null): DeviceEnvironmentReport =
+        environmentInspector.inspect(targetPackageName = packageName)
 
     suspend fun runTapSmokeCheck(request: TapSmokeCheckRequest): DeviceValidationResult {
-        val environment = environmentInspector.inspect()
+        val environment = environmentInspector.inspect(targetPackageName = request.packageName)
         if (!environment.rootReady) {
             return DeviceValidationResult(
                 environment = environment,
