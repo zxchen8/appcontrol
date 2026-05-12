@@ -1,6 +1,7 @@
 package com.plearn.appcontrol.di
 
 import android.content.Context
+import android.os.Build
 import com.plearn.appcontrol.appservice.AccessibilityConnectionPort
 import com.plearn.appcontrol.appservice.AccessibilitySettingsPort
 import com.plearn.appcontrol.appservice.AndroidAccessibilitySettingsPort
@@ -21,6 +22,8 @@ import com.plearn.appcontrol.platform.accessibility.CoroutinePauseController
 import com.plearn.appcontrol.platform.accessibility.DefaultAccessibilityPort
 import com.plearn.appcontrol.platform.accessibility.InMemoryAccessibilityServiceRegistry
 import com.plearn.appcontrol.platform.accessibility.NodeTreeAdapter
+import com.plearn.appcontrol.platform.devicecontrol.DeterministicDeviceControlPort
+import com.plearn.appcontrol.platform.devicecontrol.DeviceControlRuntimeOverrides
 import com.plearn.appcontrol.platform.devicecontrol.RootDeviceControlPort
 import com.plearn.appcontrol.platform.devicecontrol.RootShellPort
 import com.plearn.appcontrol.platform.devicecontrol.SuRootShellPort
@@ -60,10 +63,19 @@ object CapabilityModule {
     fun provideDeviceControlPort(
         rootShellPort: RootShellPort,
         @ApplicationContext context: Context,
-    ): DeviceControlPort = RootDeviceControlPort(
-        shell = rootShellPort,
-        screenshotRootDir = context.filesDir.resolve("diagnostics/screenshots"),
-    )
+    ): DeviceControlPort {
+        val screenshotRootDir = context.filesDir.resolve("diagnostics/screenshots")
+        return if (DeviceControlRuntimeOverrides.useDeterministicDeviceControl || isEmulatorDevice()) {
+            DeterministicDeviceControlPort(
+                screenshotRootDir = screenshotRootDir,
+            )
+        } else {
+            RootDeviceControlPort(
+                shell = rootShellPort,
+                screenshotRootDir = screenshotRootDir,
+            )
+        }
+    }
 
     @Provides
     @Singleton
@@ -145,4 +157,21 @@ object CapabilityModule {
         accessibility = accessibility,
         vision = vision,
     )
+
+    private fun isEmulatorDevice(): Boolean {
+        val fingerprint = Build.FINGERPRINT
+        val model = Build.MODEL
+        val manufacturer = Build.MANUFACTURER
+        val hardware = Build.HARDWARE
+        val product = Build.PRODUCT
+        return fingerprint.startsWith("generic") ||
+            fingerprint.contains("emulator", ignoreCase = true) ||
+            model.contains("Emulator", ignoreCase = true) ||
+            model.contains("Android SDK built for", ignoreCase = true) ||
+            manufacturer.contains("Genymotion", ignoreCase = true) ||
+            hardware.contains("goldfish", ignoreCase = true) ||
+            hardware.contains("ranchu", ignoreCase = true) ||
+            product.contains("sdk", ignoreCase = true) ||
+            product.contains("emulator", ignoreCase = true)
+    }
 }

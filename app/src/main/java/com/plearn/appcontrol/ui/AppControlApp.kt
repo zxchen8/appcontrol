@@ -484,6 +484,7 @@ fun AppControlApp(
                             launchTaskAction {
                                 selectedTaskId = task.taskId
                                 val result = taskManagementService.runTaskNow(task.taskId)
+                                selectedRunId = result.execution?.taskRun?.runId
                                 result.errorMessage ?: buildString {
                                     append("任务 ${task.taskId} 手动运行结果=${result.execution?.taskRun?.status ?: "unknown"}")
                                     result.execution?.taskRun?.errorCode?.let { append(" | error=$it") }
@@ -1170,17 +1171,20 @@ private fun TaskMonitoringDetailCard(
                     } else {
                         Text(
                             text = "run=${snapshot.failureContext.runId} | status=${snapshot.failureContext.status} | failedSteps=${snapshot.failureContext.failedStepCount}",
+                            modifier = Modifier.testTag("task-detail-failure-summary-${snapshot.definition.taskId}"),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (snapshot.failureContext.runErrorCode != null || snapshot.failureContext.runMessage != null) {
                             Text(
                                 text = "runError=${snapshot.failureContext.runErrorCode ?: "none"}${snapshot.failureContext.runMessage?.let { " | $it" } ?: ""}",
+                                modifier = Modifier.testTag("task-detail-failure-run-error-${snapshot.definition.taskId}"),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
                         if (snapshot.failureContext.primaryFailedStepId != null) {
                             Text(
                                 text = "step=${snapshot.failureContext.primaryFailedStepId}${snapshot.failureContext.primaryFailedStepErrorCode?.let { " | error=$it" } ?: ""}${snapshot.failureContext.primaryFailedStepMessage?.let { " | $it" } ?: ""}",
+                                modifier = Modifier.testTag("task-detail-failure-step-${snapshot.definition.taskId}"),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -1201,9 +1205,11 @@ private fun TaskMonitoringDetailCard(
                     if (snapshot.recentRuns.isEmpty()) {
                         Text(text = "当前任务还没有运行记录。", style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        snapshot.recentRuns.forEachIndexed { index, run ->
+                        snapshot.recentRuns.forEach { run ->
                             Card(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("task-detail-run-${snapshot.definition.taskId}-${run.runId}"),
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (snapshot.selectedRun?.runId == run.runId) {
                                         MaterialTheme.colorScheme.primaryContainer
@@ -1238,7 +1244,7 @@ private fun TaskMonitoringDetailCard(
                                     Button(
                                         onClick = { onSelectRun(run.runId) },
                                         modifier = Modifier.testTag(
-                                            "task-detail-select-run-${snapshot.definition.taskId}-$index",
+                                            "task-detail-select-run-${snapshot.definition.taskId}-${run.runId}",
                                         ),
                                         enabled = !loading && !actionInFlight,
                                     ) {

@@ -57,6 +57,7 @@
 - `sys.boot_completed` 返回 `1`
 - AppControl Debug 包与 debugAndroidTest 包可安装
 - 若镜像支持，可执行 `adb root`
+- androidTest 通过自定义 instrumentation runner 默认启用 deterministic device-control override，避免本地模拟器 smoke 依赖交互式 `su` 授权；若后续要在 rooted 真机上复用 instrumentation，可通过 `-Pandroid.testInstrumentationRunnerArguments.appcontrol.deterministicDeviceControl=false` 显式关闭
 
 ```powershell
 adb devices
@@ -71,12 +72,12 @@ adb -s <device-id> root
 1. 确认设备已连接，且 Android 版本为 9 或 10。
 2. 确认 `sys.boot_completed` 返回 `1`，避免在系统未完全启动时触发 UI 用例。
 3. 若镜像支持，执行 `adb root`，用于尽早暴露 root shell 差异。
-4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新，以及入口可见性正常。
+4. 运行 androidTest 套件，确认 `AppControlAppSmokeTest` 通过，主界面、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新、recent run 详情切换，以及 failure context 读侧展示正常。
 5. 检查 `DeviceValidationUiSmokeTest` 已通过，证明设备验证入口中的“检查环境”按钮能驱动环境文本刷新护栏。
 
 已验证基线：
 
-- 2026-05-12：`emulator-5554`，Android 9，`.\gradlew.bat :app:connectedDebugAndroidTest` 通过，共 10 条 instrumentation 用例。
+- 2026-05-12：`emulator-5554`，Android 9，`.\gradlew.bat :app:connectedDebugAndroidTest` 通过，共 12 条 instrumentation 用例。
 
 当前模拟器自动化覆盖快照：
 
@@ -91,6 +92,8 @@ adb -s <device-id> root
 | `AppControlAppSmokeTest.shouldRefreshTaskDetailScheduleSummaryAfterDisablingSelectedTask` | 已打开详情的唯一任务在停用后，详情调度摘要会刷新为 `standby=false` | Passed on 2026-05-12 |
 | `AppControlAppSmokeTest.shouldShowRecentRunAndStepRecordsAfterManualRun` | 手动运行唯一任务后，详情会出现 latest manual run 与 `step-start-app` 步骤记录 | Passed on 2026-05-12 |
 | `AppControlAppSmokeTest.shouldRefreshTaskLatestSummaryAfterManualRun` | 手动运行唯一任务后，任务列表 latest 摘要会刷新为 manual | Passed on 2026-05-12 |
+| `AppControlAppSmokeTest.shouldSwitchSelectedRunWhenChoosingOlderRunDetail` | 任务详情页默认选中最新 run，并可切换回 older recent run 查看步骤详情 | Passed on 2026-05-12 |
+| `AppControlAppSmokeTest.shouldShowFailureContextForFailedManualRun` | 手动运行 runtime-invalid package 任务后，详情会展示 failed 状态与 `STEP_INVALID_ARGUMENT` failure context | Passed on 2026-05-12 |
 | `DeviceValidationUiSmokeTest.shouldRenderEnvironmentDetailsAfterInspectEnvironmentClick` | 设备验证入口的 deterministic 环境文本刷新 | Passed on 2026-05-12 |
 
 建议记录的证据：
@@ -101,7 +104,7 @@ adb -s <device-id> root
 
 ### 3.4 Rooted 真机后续验证
 
-模拟器预检只覆盖 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
+模拟器预检只覆盖 UI 启动、任务导入与启停往返写读侧链路、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、任务列表 latest 摘要刷新、recent run 详情切换、failure context 读侧展示、入口可见性和 deterministic 文本刷新护栏。以下能力仍必须在 Android 9/10 rooted 真机上完成：
 
 - 无障碍服务启用与连接闭环
 - 手动真实执行与步骤诊断产物落库
@@ -126,8 +129,8 @@ adb -s <device-id> root
 
 | 场景 | 步骤 | 预期 | 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，唯一任务导入与停用再启用会刷新到读侧任务视图，当前仓库中的任务 JSON 可载回编辑器，可打开任务详情读取调度摘要，并可在停用后看到 `standby=false`，手动运行后可看到 recent run、step 记录和 latest manual 摘要，且 deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
-| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面、入口文案以及唯一任务导入、停用再启用、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新，以及手动运行后的 recent run/step 详情刷新和 latest manual 摘要刷新正常 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
+| 模拟器预检 | 运行 androidTest 套件 | MainActivity 主界面可见，唯一任务导入与停用再启用会刷新到读侧任务视图，当前仓库中的任务 JSON 可载回编辑器，可打开任务详情读取调度摘要，并可在停用后看到 `standby=false`，手动运行后可看到 recent run、step 记录、latest manual 摘要和 failure context，且可在详情页切换 older recent run；deterministic UI harness 中环境检查按钮点击后出现四行环境文本 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
+| 应用启动冒烟 | 运行 AppControlAppSmokeTest | 主界面、入口文案以及唯一任务导入、停用再启用、当前仓库中的任务 JSON 载回编辑器、任务详情调度摘要读侧与停用后的刷新、手动运行后的 recent run/step 详情刷新、latest manual 摘要刷新、recent run 详情切换和 failure context 展示正常 | Passed on 2026-05-12 | connectedDebugAndroidTest on emulator-5554 |
 | 环境检查（rooted 真机） | 点击“检查环境” | Root/Accessibility/Foreground package 的真实设备状态正确显示 | Pending | Pending |
 | 手动真实执行 | 从任务列表触发手动运行 | 生成 taskRun、stepRun 与诊断证据 | Pending | Pending |
 | cron 调度 | 启用 cron 任务并等待触发 | 调度待命状态正确，任务按 cron 触发 | Pending | Pending |
