@@ -7,6 +7,7 @@ import com.plearn.appcontrol.appservice.SchedulerStandbyController
 import com.plearn.appcontrol.appservice.SchedulerRecoveryAlarmScheduler
 import com.plearn.appcontrol.appservice.SchedulerRecoveryOrchestrator
 import com.plearn.appcontrol.capability.CapabilityFacade
+import com.plearn.appcontrol.data.repository.ContinuousSessionPersistenceRepository
 import com.plearn.appcontrol.data.repository.CredentialRepository
 import com.plearn.appcontrol.data.repository.RunRecordRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
@@ -78,6 +79,7 @@ object ExecutionServicesModule {
         taskRepository: TaskRepository,
         credentialRepository: CredentialRepository,
         sessionRepository: SessionRepository,
+        continuousSessionPersistenceRepository: ContinuousSessionPersistenceRepository,
         taskRunner: TaskRunner,
         executionRecorder: TaskExecutionRecorder,
         capabilityFacade: CapabilityFacade,
@@ -89,6 +91,7 @@ object ExecutionServicesModule {
         taskRepository = taskRepository,
         credentialRepository = credentialRepository,
         sessionRepository = sessionRepository,
+        continuousSessionPersistenceRepository = continuousSessionPersistenceRepository,
         taskRunner = taskRunner,
         executionRecorder = executionRecorder,
         capabilityFacade = capabilityFacade,

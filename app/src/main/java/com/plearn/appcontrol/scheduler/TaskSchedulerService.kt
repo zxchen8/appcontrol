@@ -8,6 +8,8 @@ import com.plearn.appcontrol.data.model.CredentialProfileRecord
 import com.plearn.appcontrol.data.model.TaskRunRecord
 import com.plearn.appcontrol.data.model.TaskDefinitionRecord
 import com.plearn.appcontrol.data.model.TaskScheduleStateRecord
+import com.plearn.appcontrol.data.repository.ContinuousSessionPersistenceRepository
+import com.plearn.appcontrol.data.repository.TerminalSessionUpdate
 import com.plearn.appcontrol.data.repository.CredentialRepository
 import com.plearn.appcontrol.data.repository.SessionRepository
 import com.plearn.appcontrol.data.repository.TaskRepository
@@ -36,6 +38,7 @@ class TaskSchedulerService(
     private val taskRepository: TaskRepository,
     private val credentialRepository: CredentialRepository,
     private val sessionRepository: SessionRepository,
+    private val continuousSessionPersistenceRepository: ContinuousSessionPersistenceRepository? = null,
     private val taskRunner: TaskRunner,
     private val executionRecorder: TaskExecutionRecorder,
     private val capabilityFacade: CapabilityFacade? = null,
@@ -300,22 +303,22 @@ class TaskSchedulerService(
                     sessionRepository.upsertSession(activeSession)
                     sessionPersisted = true
                 }
-                executionRecorder.record(
+                val terminalResult = executionRecorder.record(
                     result = buildSyntheticContinuousRunResult(
-                        sessionId = activeSession.sessionId,
-                        cycleNo = activeSession.totalCycles + 1,
-                        taskId = executableTask.definitionRecord.taskId,
-                        credentialSetId = credentialSetId,
-                        nowMs = nowMs,
-                        status = TaskRunStatus.TIMED_OUT,
-                        errorCode = SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED,
-                        message = "Continuous task ${executableTask.definitionRecord.taskId} timed out before execution because the session reached maxDuration.",
-                        artifactsJson = buildPreRunTimedOutArtifactJson(),
-                    ),
+                    sessionId = activeSession.sessionId,
+                    cycleNo = activeSession.totalCycles + 1,
+                    taskId = executableTask.definitionRecord.taskId,
+                    credentialSetId = credentialSetId,
+                    nowMs = nowMs,
+                    status = TaskRunStatus.TIMED_OUT,
+                    errorCode = SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED,
+                    message = "Continuous task ${executableTask.definitionRecord.taskId} timed out before execution because the session reached maxDuration.",
+                    artifactsJson = buildPreRunTimedOutArtifactJson(),
+                ),
                     sessionId = activeSession.sessionId,
                     cycleNo = activeSession.totalCycles + 1,
                 )
-                sessionRepository.updateTerminalState(
+                val terminalUpdate = TerminalSessionUpdate(
                     sessionId = activeSession.sessionId,
                     status = TaskRunStatus.TIMED_OUT,
                     finishedAt = nowMs,
@@ -324,6 +327,23 @@ class TaskSchedulerService(
                     failedCycles = activeSession.failedCycles,
                     lastErrorCode = SchedulerFailureCode.SCHEDULER_MAX_DURATION_REACHED,
                 )
+                if (continuousSessionPersistenceRepository != null) {
+                    continuousSessionPersistenceRepository.recordTerminalCycle(
+                        taskRun = terminalResult.taskRun,
+                        stepRuns = terminalResult.stepRuns,
+                        terminalUpdate = terminalUpdate,
+                    )
+                } else {
+                    sessionRepository.updateTerminalState(
+                        sessionId = terminalUpdate.sessionId,
+                        status = terminalUpdate.status,
+                        finishedAt = terminalUpdate.finishedAt,
+                        totalCycles = terminalUpdate.totalCycles,
+                        successCycles = terminalUpdate.successCycles,
+                        failedCycles = terminalUpdate.failedCycles,
+                        lastErrorCode = terminalUpdate.lastErrorCode,
+                    )
+                }
                 taskRepository.upsertScheduleState(
                     executableTask.scheduleState.copy(
                         nextTriggerAt = null,
@@ -369,15 +389,23 @@ class TaskSchedulerService(
             }
 
             val cycleNo = activeSession.totalCycles + 1
-            val execution = executionRecorder.record(
-                result = taskRunner.run(executableTask.task, RunTriggerType.CONTINUOUS).withCredentialContext(
-                    credentialSetId = credentialSetId,
-                    credentialProfileId = rotation.current.profileId,
-                    credentialAlias = rotation.current.alias,
-                ),
-                sessionId = activeSession.sessionId,
-                cycleNo = cycleNo,
+            val rawExecution = taskRunner.run(executableTask.task, RunTriggerType.CONTINUOUS).withCredentialContext(
+                credentialSetId = credentialSetId,
+                credentialProfileId = rotation.current.profileId,
+                credentialAlias = rotation.current.alias,
             )
+            val execution = if (continuousSessionPersistenceRepository != null) {
+                rawExecution.withSessionContext(
+                    sessionId = activeSession.sessionId,
+                    cycleNo = cycleNo,
+                )
+            } else {
+                executionRecorder.record(
+                    result = rawExecution,
+                    sessionId = activeSession.sessionId,
+                    cycleNo = cycleNo,
+                )
+            }
 
             val successCycles = activeSession.successCycles + if (execution.taskRun.status == TaskRunStatus.SUCCESS) 1 else 0
             val failedCycles = activeSession.failedCycles + if (execution.taskRun.status == TaskRunStatus.SUCCESS) 0 else 1
@@ -393,7 +421,7 @@ class TaskSchedulerService(
                     reachedMaxDuration -> TaskRunStatus.TIMED_OUT
                     else -> TaskRunStatus.SUCCESS
                 }
-                sessionRepository.updateTerminalState(
+                val terminalUpdate = TerminalSessionUpdate(
                     sessionId = activeSession.sessionId,
                     status = terminalStatus,
                     finishedAt = nowMs,
@@ -402,6 +430,23 @@ class TaskSchedulerService(
                     failedCycles = failedCycles,
                     lastErrorCode = execution.taskRun.errorCode,
                 )
+                if (continuousSessionPersistenceRepository != null) {
+                    continuousSessionPersistenceRepository.recordTerminalCycle(
+                        taskRun = execution.taskRun,
+                        stepRuns = execution.stepRuns,
+                        terminalUpdate = terminalUpdate,
+                    )
+                } else {
+                    sessionRepository.updateTerminalState(
+                        sessionId = terminalUpdate.sessionId,
+                        status = terminalUpdate.status,
+                        finishedAt = terminalUpdate.finishedAt,
+                        totalCycles = terminalUpdate.totalCycles,
+                        successCycles = terminalUpdate.successCycles,
+                        failedCycles = terminalUpdate.failedCycles,
+                        lastErrorCode = terminalUpdate.lastErrorCode,
+                    )
+                }
                 taskRepository.upsertScheduleState(
                     executableTask.scheduleState.copy(
                         nextTriggerAt = null,
@@ -413,20 +458,26 @@ class TaskSchedulerService(
                 return true
             }
 
-            sessionRepository.upsertSession(
-                activeSession.copy(
-                    status = "running",
-                    totalCycles = totalCycles,
-                    successCycles = successCycles,
-                    failedCycles = failedCycles,
-                    currentCredentialProfileId = rotation.current.profileId,
-                    currentCredentialAlias = rotation.current.alias,
-                    nextCredentialProfileId = rotation.next.profileId,
-                    nextCredentialAlias = rotation.next.alias,
-                    cursorIndex = rotation.nextIndex,
-                    lastErrorCode = execution.taskRun.errorCode,
-                ),
+            val updatedSession = activeSession.copy(
+                status = "running",
+                totalCycles = totalCycles,
+                successCycles = successCycles,
+                failedCycles = failedCycles,
+                currentCredentialProfileId = rotation.current.profileId,
+                currentCredentialAlias = rotation.current.alias,
+                nextCredentialProfileId = rotation.next.profileId,
+                nextCredentialAlias = rotation.next.alias,
+                cursorIndex = rotation.nextIndex,
+                lastErrorCode = execution.taskRun.errorCode,
             )
+            continuousSessionPersistenceRepository?.recordCycleProgress(
+                taskRun = execution.taskRun,
+                stepRuns = execution.stepRuns,
+                session = updatedSession,
+            )
+            if (continuousSessionPersistenceRepository == null) {
+                sessionRepository.upsertSession(updatedSession)
+            }
             taskRepository.upsertScheduleState(
                 executableTask.scheduleState.copy(
                     nextTriggerAt = nowMs + trigger.cooldownMs,
@@ -442,27 +493,23 @@ class TaskSchedulerService(
             }
             if (sessionPersisted) {
                 val syntheticRunId = runIdFactory()
-                executionRecorder.record(
-                    result = buildSyntheticContinuousRunResult(
-                        runId = syntheticRunId,
-                        sessionId = activeSession.sessionId,
-                        cycleNo = activeSession.totalCycles + 1,
-                        taskId = executableTask.definitionRecord.taskId,
-                        credentialSetId = credentialSetId,
-                        nowMs = nowMs,
-                        status = TaskRunStatus.BLOCKED,
-                        errorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
-                        message = error.message ?: "Continuous task ${executableTask.definitionRecord.taskId} failed with an execution exception.",
-                        artifactsJson = buildExecutionExceptionArtifactJson(
-                            task = executableTask.task,
-                            taskId = executableTask.definitionRecord.taskId,
-                            runId = syntheticRunId,
-                        ),
-                    ),
+                val terminalResult = buildSyntheticContinuousRunResult(
+                    runId = syntheticRunId,
                     sessionId = activeSession.sessionId,
                     cycleNo = activeSession.totalCycles + 1,
+                    taskId = executableTask.definitionRecord.taskId,
+                    credentialSetId = credentialSetId,
+                    nowMs = nowMs,
+                    status = TaskRunStatus.BLOCKED,
+                    errorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
+                    message = error.message ?: "Continuous task ${executableTask.definitionRecord.taskId} failed with an execution exception.",
+                    artifactsJson = buildExecutionExceptionArtifactJson(
+                        task = executableTask.task,
+                        taskId = executableTask.definitionRecord.taskId,
+                        runId = syntheticRunId,
+                    ),
                 )
-                sessionRepository.updateTerminalState(
+                val terminalUpdate = TerminalSessionUpdate(
                     sessionId = activeSession.sessionId,
                     status = TaskRunStatus.BLOCKED,
                     finishedAt = nowMs,
@@ -471,6 +518,28 @@ class TaskSchedulerService(
                     failedCycles = activeSession.failedCycles,
                     lastErrorCode = SchedulerFailureCode.SCHEDULER_EXECUTION_EXCEPTION,
                 )
+                if (continuousSessionPersistenceRepository != null) {
+                    continuousSessionPersistenceRepository.recordTerminalCycle(
+                        taskRun = terminalResult.taskRun,
+                        stepRuns = terminalResult.stepRuns,
+                        terminalUpdate = terminalUpdate,
+                    )
+                } else {
+                    executionRecorder.record(
+                        result = terminalResult,
+                        sessionId = activeSession.sessionId,
+                        cycleNo = activeSession.totalCycles + 1,
+                    )
+                    sessionRepository.updateTerminalState(
+                        sessionId = terminalUpdate.sessionId,
+                        status = terminalUpdate.status,
+                        finishedAt = terminalUpdate.finishedAt,
+                        totalCycles = terminalUpdate.totalCycles,
+                        successCycles = terminalUpdate.successCycles,
+                        failedCycles = terminalUpdate.failedCycles,
+                        lastErrorCode = terminalUpdate.lastErrorCode,
+                    )
+                }
             }
             taskRepository.upsertScheduleState(
                 executableTask.scheduleState.copy(
@@ -497,22 +566,18 @@ class TaskSchedulerService(
             credentialSetId = credentialSetId,
             nowMs = nowMs,
         )
-        executionRecorder.record(
-            result = buildSyntheticContinuousRunResult(
-                sessionId = session.sessionId,
-                cycleNo = session.totalCycles + 1,
-                taskId = executableTask.definitionRecord.taskId,
-                credentialSetId = credentialSetId,
-                nowMs = nowMs,
-                status = TaskRunStatus.BLOCKED,
-                errorCode = errorCode,
-                message = "Continuous task ${executableTask.definitionRecord.taskId} blocked before execution.",
-                artifactsJson = buildPreRunBlockedArtifactJson(),
-            ),
+        val terminalResult = buildSyntheticContinuousRunResult(
             sessionId = session.sessionId,
             cycleNo = session.totalCycles + 1,
+            taskId = executableTask.definitionRecord.taskId,
+            credentialSetId = credentialSetId,
+            nowMs = nowMs,
+            status = TaskRunStatus.BLOCKED,
+            errorCode = errorCode,
+            message = "Continuous task ${executableTask.definitionRecord.taskId} blocked before execution.",
+            artifactsJson = buildPreRunBlockedArtifactJson(),
         )
-        sessionRepository.updateTerminalState(
+        val terminalUpdate = TerminalSessionUpdate(
             sessionId = session.sessionId,
             status = TaskRunStatus.BLOCKED,
             finishedAt = nowMs,
@@ -521,6 +586,28 @@ class TaskSchedulerService(
             failedCycles = session.failedCycles,
             lastErrorCode = errorCode,
         )
+        if (continuousSessionPersistenceRepository != null) {
+            continuousSessionPersistenceRepository.recordTerminalCycle(
+                taskRun = terminalResult.taskRun,
+                stepRuns = terminalResult.stepRuns,
+                terminalUpdate = terminalUpdate,
+            )
+        } else {
+            executionRecorder.record(
+                result = terminalResult,
+                sessionId = session.sessionId,
+                cycleNo = session.totalCycles + 1,
+            )
+            sessionRepository.updateTerminalState(
+                sessionId = terminalUpdate.sessionId,
+                status = terminalUpdate.status,
+                finishedAt = terminalUpdate.finishedAt,
+                totalCycles = terminalUpdate.totalCycles,
+                successCycles = terminalUpdate.successCycles,
+                failedCycles = terminalUpdate.failedCycles,
+                lastErrorCode = terminalUpdate.lastErrorCode,
+            )
+        }
 
         taskRepository.upsertScheduleState(
             executableTask.scheduleState.copy(
@@ -564,6 +651,22 @@ class TaskSchedulerService(
         stepRuns = emptyList(),
         taskAttemptCount = 0,
     )
+
+    private fun TaskExecutionResult.withSessionContext(
+        sessionId: String,
+        cycleNo: Int,
+    ): TaskExecutionResult {
+        val persistedTaskRun = taskRun.copy(
+            sessionId = sessionId,
+            cycleNo = cycleNo,
+        )
+        return copy(
+            taskRun = persistedTaskRun,
+            stepRuns = stepRuns.map { stepRun ->
+                stepRun.copy(runId = persistedTaskRun.runId)
+            },
+        )
+    }
 
     private fun buildSyntheticCronRunResult(
         runId: String = runIdFactory(),

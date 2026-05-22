@@ -12,9 +12,11 @@ import com.plearn.appcontrol.data.local.dao.StepRunDao
 import com.plearn.appcontrol.data.local.dao.TaskDefinitionDao
 import com.plearn.appcontrol.data.local.dao.TaskRunDao
 import com.plearn.appcontrol.data.local.dao.TaskScheduleStateDao
+import com.plearn.appcontrol.data.repository.ContinuousSessionPersistenceRepository
 import com.plearn.appcontrol.data.repository.DiagnosticsArtifactFileStore
 import com.plearn.appcontrol.data.repository.FileBackedDiagnosticsArtifactFileStore
 import com.plearn.appcontrol.data.repository.CredentialRepository
+import com.plearn.appcontrol.data.repository.RoomContinuousSessionPersistenceRepository
 import com.plearn.appcontrol.data.repository.RoomCredentialRepository
 import com.plearn.appcontrol.data.repository.RoomRunRecordRepository
 import com.plearn.appcontrol.data.repository.RoomSessionRepository
@@ -88,6 +90,20 @@ object DataModule {
     @Singleton
     fun provideSessionRepository(continuousSessionDao: ContinuousSessionDao): SessionRepository =
         RoomSessionRepository(continuousSessionDao)
+
+    @Provides
+    @Singleton
+    fun provideContinuousSessionPersistenceRepository(
+        database: AppControlDatabase,
+        taskRunDao: TaskRunDao,
+        stepRunDao: StepRunDao,
+        continuousSessionDao: ContinuousSessionDao,
+    ): ContinuousSessionPersistenceRepository = RoomContinuousSessionPersistenceRepository(
+        database = database,
+        taskRunDao = taskRunDao,
+        stepRunDao = stepRunDao,
+        continuousSessionDao = continuousSessionDao,
+    )
 
     @Provides
     @Singleton
