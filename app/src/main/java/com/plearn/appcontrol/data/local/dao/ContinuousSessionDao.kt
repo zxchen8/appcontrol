@@ -11,6 +11,9 @@ interface ContinuousSessionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(session: ContinuousSessionEntity)
 
+    @Query("SELECT * FROM continuous_sessions WHERE sessionId = :sessionId LIMIT 1")
+    suspend fun findBySessionId(sessionId: String): ContinuousSessionEntity?
+
     @Query("SELECT * FROM continuous_sessions WHERE taskId = :taskId AND status = 'running' LIMIT 1")
     suspend fun findRunningSessionByTaskId(taskId: String): ContinuousSessionEntity?
 
@@ -26,5 +29,5 @@ interface ContinuousSessionDao {
         successCycles: Int,
         failedCycles: Int,
         lastErrorCode: String?,
-    )
+    ): Int
 }

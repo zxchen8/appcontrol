@@ -16,6 +16,10 @@
 - 本文档不重复定义产品范围和技术方案，只补充开发执行、测试、安全、数据落库和 Definition of Done 约束
 - 本文档优先记录跨迭代稳定的工程与协作约束，避免重复承载某一版产品方案细节
 - 若出现文档冲突：产品范围与技术方案以设计文档为准；研发流程、测试、日志、安全要求以本文件为准
+- 仓库级规则分层采用“设计文档是产品与技术主源，本文件是稳定工程规则主源，`.github/instructions/` 是按文件面 auto-load 的派生 guardrails，`.github/skills/` 是按任务语义调用的 operator cards”模式；它们服务于执行与检索，不替代设计文档或本文件。
+- 当前已抽取的 auto-load guardrails 包括：`.github/instructions/execution-contract.instructions.md`、`.github/instructions/data-diagnostics.instructions.md`、`.github/instructions/android-validation.instructions.md`、`.github/instructions/capability-security.instructions.md`。
+- 当前已抽取的 repo-specific skill 为 `.github/skills/android-instrumentation-triage/`；它提供 instrumentation triage 的操作卡和长文参考，不单独定义产品或架构主约束。
+- 若设计文档或本文件中与执行契约、数据与诊断、Android 验证、高权限 capability 边界相关的长期规则发生变化，应同步校准对应 instruction 或 skill；纯流程、协作和 Definition of Done 约束默认继续保留在本文件，不强制拆成 auto-load instruction。
 
 ## 3. 技术与架构规则
 
